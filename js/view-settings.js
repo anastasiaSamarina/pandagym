@@ -56,32 +56,58 @@ function reportDialog(res, r) {
 
 // ======================= настройки =======================
 export function settingsView() {
-  const db = state.db, dev = state.device;
+  const db = state.db, dev = state.device, st = db.settings;
   const root = h('div', { class: 'page' });
+  // Черновик: ничего не сохраняется, пока не нажата «Сохранить»
+  const D = { perWeek: st.perWeek, currentCycle: st.currentCycle, restSec: st.restSec || 60, sound: soundOn(), plateauN: st.plateauN || 4, plateauPct: st.plateauPct ?? 3,
+    compareMode: st.compareMode || 'last', theme: dev.theme, gh: { ...dev.gh }, token: dev.token };
+  let dirty = false;
+  const bar = h('div', { class: 'save-bar', hidden: true },
+    h('span', {}, 'Есть несохранённые изменения'),
+    h('button', { class: 'btn', onclick: () => refresh() }, 'Отмена'),
+    h('button', { class: 'btn primary', onclick: () => save() }, 'Сохранить'));
+  const touched = () => { dirty = true; bar.hidden = false; };
   const field = (label, input) => h('label', { class: 'fld' }, h('span', {}, label), input);
-  const gh = dev.gh;
-  const ghIn = (key, ph) => h('input', { class: 'txt', value: gh[key], placeholder: ph, autocapitalize: 'none', autocomplete: 'off', oninput: (e) => { gh[key] = e.target.value.trim(); saveDevice(); } });
-  const token = h('input', { class: 'txt', type: 'password', value: dev.token, placeholder: 'github_pat_…', autocomplete: 'off', oninput: (e) => { dev.token = e.target.value.trim(); saveDevice(); } });
+  const numIn = (key, attrs) => h('input', { class: 'num', type: 'number', ...attrs, value: D[key], oninput: (e) => { D[key] = e.target.value; touched(); } });
+  const ghIn = (key, ph) => h('input', { class: 'txt', value: D.gh[key], placeholder: ph, autocapitalize: 'none', autocomplete: 'off', oninput: (e) => { D.gh[key] = e.target.value.trim(); touched(); } });
+  const token = h('input', { class: 'txt', type: 'password', value: D.token, placeholder: 'github_pat_…', autocomplete: 'off', oninput: (e) => { D.token = e.target.value.trim(); touched(); } });
   const status = h('div', { class: 'muted' }, statusText());
-  const unsub = () => {};
-  void unsub;
+
+  function save() {
+    st.perWeek = Math.max(1, Number(D.perWeek) || 3);
+    st.currentCycle = D.currentCycle; st.cycleSet = true;
+    st.restSec = Math.max(10, Number(D.restSec) || 60);
+    st.plateauN = Math.min(12, Math.max(2, Number(D.plateauN) || 4));
+    st.plateauPct = Math.max(0, Number(D.plateauPct) || 0);
+    st.compareMode = D.compareMode;
+    setSound(D.sound);
+    dev.theme = D.theme; dev.gh = { ...dev.gh, ...D.gh }; dev.token = D.token;
+    saveDevice(); applyTheme(); markChanged();
+    dirty = false; toast('Настройки сохранены'); refresh();
+  }
+  /** кнопки «Проверить» и «Синхронизировать» используют то, что сейчас в полях */
+  const saveFirst = () => { if (dirty) save(); };
 
   put(root, h('h1', {}, 'Настройки'),
     h('section', { class: 'card' }, h('h3', {}, 'Занятия'),
-      field('Занятий в неделю (цель)', h('input', { class: 'num', type: 'number', min: 1, max: 14, value: db.settings.perWeek, onchange: (e) => { db.settings.perWeek = Math.max(1, Number(e.target.value) || 3); markChanged(); } })),
-      field('Текущий цикл', h('select', { class: 'sel', value: db.settings.currentCycle, onchange: (e) => { db.settings.currentCycle = e.target.value; db.settings.cycleSet = true; markChanged(); } }, db.settings.cycles.map((c) => h('option', { value: c }, c)))),
+      field('Занятий в неделю (цель)', numIn('perWeek', { min: 1, max: 14 })),
+      field('Текущий цикл', h('select', { class: 'sel', value: D.currentCycle, onchange: (e) => { D.currentCycle = e.target.value; touched(); } }, st.cycles.map((c) => h('option', { value: c }, c)))),
       h('div', { class: 'row wrap' },
         h('button', { class: 'btn', onclick: () => cycleDialog('new') }, '＋ Новый цикл'),
         h('button', { class: 'btn', onclick: () => cycleDialog('rename') }, '✎ Переименовать текущий')),
       h('small', { class: 'muted' }, 'Каждый цикл — отдельный лист в Excel-файле.')),
-    h('section', { class: 'card' }, h('h3', {}, 'Отдых и плато'),
-      field('Отдых между подходами, секунд', h('input', { class: 'num', type: 'number', min: 10, max: 600, step: 5, value: db.settings.restSec || 60, onchange: (e) => { db.settings.restSec = Math.max(10, Number(e.target.value) || 60); markChanged(); } })),
-      h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: soundOn(), onchange: (e) => { setSound(e.target.checked); if (e.target.checked) beep(880, 120); } }), 'Звук по окончании отдыха (на этом устройстве)'),
-      h('small', { class: 'muted' }, 'Звук работает, пока приложение открыто и экран не заблокирован. Если звука нет, проверь, что в браузере для этого сайта он не отключён, и громкость мультимедиа на телефоне.'),
-      h('h4', {}, 'Что считать плато'),
-      field('Сколько последних занятий смотреть', h('input', { class: 'num', type: 'number', min: 2, max: 12, value: db.settings.plateauN || 4, onchange: (e) => { db.settings.plateauN = Math.min(12, Math.max(2, Number(e.target.value) || 4)); markChanged(); } })),
-      field('Рост объёма, который считается прогрессом, %', h('input', { class: 'num', type: 'number', min: 0, max: 50, step: 0.5, value: db.settings.plateauPct ?? 3, onchange: (e) => { db.settings.plateauPct = Math.max(0, Number(e.target.value) || 0); markChanged(); } })),
-      h('small', { class: 'muted' }, 'Плато — когда за последние N занятий ни разу не вырос рабочий вес и общий объём (вес × повторы) не вырос больше чем на указанный процент по сравнению с самым первым из этих занятий.')),
+    h('section', { class: 'card' }, h('h3', {}, '⏱ Отдых'),
+      field('Отдых между подходами, секунд', numIn('restSec', { min: 10, max: 600, step: 5 })),
+      h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: D.sound, onchange: (e) => { D.sound = e.target.checked; touched(); if (e.target.checked) beep(880, 120); } }), 'Звук по окончании отдыха (на этом устройстве)'),
+      h('small', { class: 'muted' }, 'Звук работает, пока приложение открыто и экран не заблокирован. Если звука нет, проверь, что в браузере для этого сайта он не отключён, и громкость мультимедиа не на нуле.')),
+    h('section', { class: 'card' }, h('h3', {}, '📉 Плато'),
+      field('Сколько последних занятий смотреть', numIn('plateauN', { min: 2, max: 12 })),
+      field('Рост объёма, который считается прогрессом, %', numIn('plateauPct', { min: 0, max: 50, step: 0.5 })),
+      h('small', { class: 'muted' }, 'Плато — когда за последние N занятий ни разу не вырос рабочий вес и общий объём (вес × повторы) не вырос больше чем на указанный процент по сравнению с самым первым из них.')),
+    h('section', { class: 'card' }, h('h3', {}, '↔ Сравнение на карточке упражнения'),
+      h('p', { class: 'muted' }, 'С чем сравнивать текущую тренировку в самой тренировке (цветные подсказки и «всего +N%»). В Аналитике можно смотреть любое сравнение.'),
+      h('div', { class: 'col' }, [['last', 'С прошлым разом'], ['best', 'С лучшим разом (по общему объёму)'], ['avg4', 'Со средним за последние 4 раза']].map(([k, l]) =>
+        h('label', { class: 'chk' }, h('input', { type: 'radio', name: 'cmp', value: k, checked: D.compareMode === k, onchange: () => { D.compareMode = k; touched(); } }), l)))),
     h('section', { class: 'card' }, h('h3', {}, 'Данные'),
       h('div', { class: 'col' },
         h('button', { class: 'btn', onclick: importDialog }, '📂 Загрузить Excel (старая таблица или файл приложения)'),
@@ -94,15 +120,16 @@ export function settingsView() {
       field('Владелец (логин GitHub)', ghIn('owner', 'my-login')), field('Репозиторий с данными', ghIn('repo', 'gym-data')),
       field('Ветка', ghIn('branch', 'main')), field('Путь к файлу (.json — быстро и надёжно, .xlsx — таблица)', ghIn('path', 'data/gym.json')), field('Токен доступа (хранится только на этом устройстве)', token),
       h('div', { class: 'row wrap' },
-        h('button', { class: 'btn', onclick: async () => { try { const r = await testConnection(); toast(r.canPush ? `Подключение работает${r.private ? ' (репозиторий приватный ✓)' : ' — внимание: репозиторий ПУБЛИЧНЫЙ'}` : 'Репозиторий виден, но записывать токен не может', 5000); } catch (e) { toast(e.message, 6000); } } }, 'Проверить подключение'),
-        h('button', { class: 'btn primary', onclick: async () => { try { await syncNow(); toast('Синхронизировано'); refresh(); } catch (e) { toast(e.message, 6000); } } }, 'Синхронизировать сейчас'),
+        h('button', { class: 'btn', onclick: async () => { saveFirst(); try { const r = await testConnection(); toast(r.canPush ? `Подключение работает${r.private ? ' (репозиторий приватный ✓)' : ' — внимание: репозиторий ПУБЛИЧНЫЙ'}` : 'Репозиторий виден, но токен без права записи (нужен Contents: Read and write)', 6000); } catch (e) { toast(e.message, 6000); } } }, 'Проверить подключение'),
+        h('button', { class: 'btn primary', onclick: async () => { saveFirst(); try { await syncNow(); toast('Синхронизировано'); refresh(); } catch (e) { toast(e.message, 6000); } } }, 'Синхронизировать сейчас'),
         h('button', { class: 'btn', onclick: () => { dev.token = ''; saveDevice(); toast('Токен удалён с этого устройства'); refresh(); } }, 'Забыть токен'),
         h('a', { class: 'btn', href: '#/synclog' }, '🧾 Журнал синхронизации')),
       status),
     h('section', { class: 'card' }, h('h3', {}, 'Вид'),
-      field('Тема', h('select', { class: 'sel', value: dev.theme, onchange: (e) => { dev.theme = e.target.value; saveDevice(); applyTheme(); } },
+      field('Тема', h('select', { class: 'sel', value: D.theme, onchange: (e) => { D.theme = e.target.value; touched(); } },
         h('option', { value: 'auto' }, 'Как в системе'), h('option', { value: 'light' }, 'Светлая'), h('option', { value: 'dark' }, 'Тёмная')))),
-    h('p', { class: 'muted small' }, 'Версия 1.0 · данные: ', `${db.workouts.length} тренировок, ${db.exercises.length} упражнений`));
+    h('p', { class: 'muted small' }, 'Версия 4 (2026-11-23) · данные: ', `${db.workouts.length} тренировок, ${db.exercises.length} упражнений`),
+    bar);
   return root;
 }
 function statusText() {
@@ -137,7 +164,7 @@ export function exercisesView() {
   const root = h('div', { class: 'page' });
   const used = (n) => historyOf(db, n).length;
   const sim = similarExercises(db);
-  put(root, h('a', { class: 'back', href: '#/settings' }, '← Настройки'), h('h1', {}, 'Упражнения'),
+  put(root, h('a', { class: 'back', href: '#/settings', 'aria-label': 'Назад', title: 'Назад' }, '←'), h('h1', {}, 'Упражнения'),
     h('p', { class: 'muted' }, 'Справочник упражнений. Здесь можно: переименовать упражнение или объединить два названия в одно — новое название сразу подставится во всех тренировках; указать, что упражнение считается в секундах; отметить «облегчение» (гравитрон: меньше вес = лучше, поэтому цвета сравнения инвертируются).'),
     sim.length ? h('section', { class: 'card warn' }, h('b', {}, 'Возможные дубли'),
       sim.map(([a, b]) => h('div', { class: 'dup-row' }, h('span', {}, `«${a}» ≈ «${b}»`), h('span', { class: 'row' }, h('button', { class: 'btn small', onclick: () => mergeDialog(a, b) }, 'Объединить'),
@@ -200,7 +227,7 @@ export function checkView() {
       log.filter((x) => x.level === k).map((x) => h('div', { class: 'imp-row' }, h('span', {}, x.text, h('small', { class: 'muted' }, ` (${x.where})`)),
         h('span', { class: 'row' }, exists(x.wid) ? h('a', { class: 'btn small', href: '#/w/' + x.wid }, 'Открыть') : null,
           h('button', { class: 'btn small', onclick: () => { db.importLog = db.importLog.filter((y) => y.id !== x.id); markChanged(); refresh(); } }, 'Скрыть'))))) : null)) : null;
-  return h('div', { class: 'page' }, h('a', { class: 'back', href: '#/settings' }, '← Настройки'), h('h1', {}, 'Проверка данных'),
+  return h('div', { class: 'page' }, h('a', { class: 'back', href: '#/settings', 'aria-label': 'Назад', title: 'Назад' }, '←'), h('h1', {}, 'Проверка данных'),
     logSection,
     h('p', { class: 'muted' }, 'Ниже — автоматическая проверка: даты, которые не читаются, две одинаковые тренировки в один день, пустые тренировки, подозрительные веса, похожие названия упражнений.'),
     items.length ? h('section', { class: 'card' }, items.map((i) => h('a', { class: 'check-row', href: i.link || '#/check' }, h('span', {}, icon[i.level]), h('span', {}, i.text)))) : h('section', { class: 'card empty' }, '✓ Проблем не найдено'));
@@ -211,11 +238,12 @@ export function syncLogView() {
   const log = getSyncLog().slice().reverse();
   const icon = { info: '·', ok: '✓', warn: '⚠', error: '⛔' };
   const text = () => getSyncLog().map((x) => `${x.t} [${x.level}] ${x.msg}`).join('\n');
-  const root = h('div', { class: 'page' }, h('a', { class: 'back', href: '#/settings' }, '← Настройки'), h('h1', {}, 'Журнал синхронизации'),
+  const root = h('div', { class: 'page' }, h('a', { class: 'back', href: '#/settings', 'aria-label': 'Назад', title: 'Назад' }, '←'), h('h1', {}, 'Журнал синхронизации'),
     h('p', { class: 'muted' }, `Здесь записано, что приложение делало при каждой синхронизации и что ответил GitHub. Хранится только на этом устройстве, токен в журнал не попадает. Если что-то не работает — нажми «Скопировать» и пришли текст.`),
     h('div', { class: 'row wrap' },
       h('button', { class: 'btn primary', onclick: async () => { try { await syncNow(); toast('Синхронизировано'); } catch (e) { toast(e.message, 6000); } refresh(); } }, 'Синхронизировать сейчас'),
       h('button', { class: 'btn', onclick: async () => { try { await navigator.clipboard.writeText(text()); toast('Журнал скопирован'); } catch { toast('Не удалось скопировать'); } } }, 'Скопировать'),
+      h('button', { class: 'btn', onclick: () => download(new Blob([text()], { type: 'text/plain;charset=utf-8' }), `sync-log-${todayISO()}.txt`) }, '⬇ Скачать'),
       h('button', { class: 'btn', onclick: () => { clearSyncLog(); refresh(); } }, 'Очистить')),
     log.length ? h('section', { class: 'card log' }, log.map((x) => h('div', { class: 'log-row ' + x.level }, h('span', {}, icon[x.level] || '·'),
       h('small', { class: 'muted' }, new Date(x.t).toLocaleString('ru-RU')), h('span', {}, x.msg)))) : h('section', { class: 'card empty' }, 'Журнал пока пуст.'));

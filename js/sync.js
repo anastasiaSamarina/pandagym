@@ -170,7 +170,8 @@ export async function mediaUrl(id) {
   }
   return m ? URL.createObjectURL(m.blob) : null;
 }
-const mimeOf = (id) => (/\.gif$/i.test(id) ? 'image/gif' : /\.png$/i.test(id) ? 'image/png' : 'image/jpeg');
+const MIMES = { gif: 'image/gif', png: 'image/png', webp: 'image/webp', mp4: 'video/mp4', m4v: 'video/mp4', mov: 'video/quicktime', webm: 'video/webm' };
+const mimeOf = (id) => MIMES[(/\.(\w+)$/.exec(id) || [])[1]?.toLowerCase()] || 'image/jpeg';
 
 // ---------- автозапуск ----------
 export function startAutoSync() {

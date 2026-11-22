@@ -77,10 +77,11 @@ function addDialog(w, rerender, replaceIt = null) {
   search.addEventListener('input', paint);
   modal((c) => {
     close = c;
-    return h('div', {}, h('h3', {}, replaceIt ? 'Заменить упражнение' : 'Добавить упражнение'), search, list,
+    return h('div', {}, h('h3', {}, replaceIt ? 'Заменить упражнение' : 'Добавить упражнение'),
       replaceIt ? null : h('div', { class: 'row' },
         h('button', { class: 'btn', onclick: () => { w.items.push({ type: 'free', title: '', text: '', media: [] }); touch(w); c(); rerender(); } }, '＋ Свободный блок'),
-        h('button', { class: 'btn', onclick: () => { w.items.push({ type: 'interval', title: 'Табата', format: 'Табата', work: 20, rest: 10, rounds: 8, moves: '', text: '', result: '', media: [] }); touch(w); c(); rerender(); } }, '⏱ Интервальная (табата)')));
+        h('button', { class: 'btn', onclick: () => { w.items.push({ type: 'interval', title: 'Табата', format: 'Табата', work: 20, rest: 10, rounds: 8, moves: '', text: '', result: '', media: [] }); touch(w); c(); rerender(); } }, '⏱ Табата')),
+      search, list);
   });
   paint(); setTimeout(() => search.focus(), 50);
 }
@@ -111,7 +112,7 @@ function setsCard(w, it, ctx) {
         parts.push(h('span', { class: 'chip ' + (c.volPct > 0 ? 'better' : 'worse'), title: 'Сумма «вес × повторы» по всем кругам' },
           `Всего ${what} ${c.volPct > 0 ? '+' : '−'}${Math.abs(Math.round(c.volPct))}%: ${fmtBig(c.curVol)} против ${fmtBig(c.prevVol)}${kg}`));
       }
-      if (!parts.length) parts.push(h('span', { class: 'chip' }, 'как в прошлый раз'));
+      if (!parts.length) parts.push(h('span', { class: 'chip' }, 'без изменений'));
     }
     chip.replaceChildren(...parts);
   };
@@ -134,7 +135,7 @@ function setsCard(w, it, ctx) {
   }
   it.sets.forEach((s, i) => tbody.append(...buildRow(s, i)));
 
-  const prevLine = prev ? h('div', { class: 'prev' }, `Прошлый раз · ${fmtDate(prev.w.date, false)}: `, h('span', {}, setsLine(prev.it.sets)), prev.it.tempo && tempoText(prev.it) ? ` · темп ${tempoText(prev.it)}` : '') : null;
+  const prevLine = prev ? h('div', { class: 'prev' }, `${prev.label || 'Прошлый раз'} · ${fmtDate(prev.w.date, false)}: `, h('span', {}, setsLine(prev.it.sets)), prev.it.tempo && tempoText(prev.it) ? ` · темп ${tempoText(prev.it)}` : '') : null;
   const unit = meta.unit === 'sec' ? 'Сек' : 'Повт';
   const star = h('button', { class: 'ico star', title: 'В избранное (следить в Аналитике)', onclick: (ev) => { const e = ensureExercise(db, it.exercise); e.fav = !e.fav; markChanged(); ev.target.textContent = e.fav ? '★' : '☆'; } }, meta.fav ? '★' : '☆');
   // темп: 4 числа — подъём, пауза вверху, опускание, пауза внизу
@@ -151,7 +152,8 @@ function setsCard(w, it, ctx) {
       h('div', { class: 'ex-tools' },
         h('button', { class: 'ico', title: 'Выше', onclick: () => ctx.move(it, -1) }, '↑'),
         h('button', { class: 'ico', title: 'Ниже', onclick: () => ctx.move(it, 1) }, '↓'),
-        h('button', { class: 'ico', title: 'Ещё', onclick: () => itemMenu(w, it, ctx) }, '⋯'))),
+        h('button', { class: 'ico', title: 'Заменить упражнение', 'aria-label': 'Заменить упражнение', onclick: () => addDialog(w, ctx.rerender, it) }, '🔁'),
+        h('button', { class: 'ico del', title: 'Удалить упражнение', 'aria-label': 'Удалить упражнение', onclick: () => ctx.remove(it) }, '🗑'))),
     chip, prevLine, tempoRow,
     h('table', { class: 'sets' },
       h('thead', {}, h('tr', {}, h('th', {}, 'Круг'), weighted ? h('th', {}, 'Вес, кг') : null, F.r ? h('th', {}, unit) : null, h('th', {}))),
@@ -204,43 +206,60 @@ function fieldsDialog(w, it, ctx) {
     } }, 'Сохранить'))));
 }
 
-function itemMenu(w, it, ctx) {
-  const act = (label, fn) => h('button', { class: 'menu-item', onclick: () => { close(); fn(); } }, label);
-  let close;
-  modal((c) => {
-    close = c;
-    return h('div', { class: 'menu' }, h('h3', {}, it.exercise || it.title || 'Блок'),
-      it.type === 'sets' ? act('🔁 Заменить упражнение', () => addDialog(w, ctx.rerender, it)) : null,
-      act('🗑 Удалить из тренировки', async () => { if (await confirmBox('Удалить блок из тренировки?')) { w.items = w.items.filter((x) => x !== it); touch(w); ctx.rerender(); } }));
-  });
-}
-
 // ---------- свободный и интервальный блоки ----------
 function freeCard(w, it, ctx) {
   return h('article', { class: 'card ex' },
     h('header', { class: 'ex-head' }, h('input', { class: 'title-in', placeholder: 'Название блока', value: it.title || '', oninput: (e) => { it.title = e.target.value; touch(w); } }),
-      h('div', { class: 'ex-tools' }, h('button', { class: 'ico', onclick: () => ctx.move(it, -1) }, '↑'), h('button', { class: 'ico', onclick: () => ctx.move(it, 1) }, '↓'), h('button', { class: 'ico', onclick: () => itemMenu(w, it, ctx) }, '⋯'))),
+      h('div', { class: 'ex-tools' }, h('button', { class: 'ico', onclick: () => ctx.move(it, -1) }, '↑'), h('button', { class: 'ico', onclick: () => ctx.move(it, 1) }, '↓'), h('button', { class: 'ico del', title: 'Удалить блок', 'aria-label': 'Удалить блок', onclick: () => ctx.remove(it) }, '🗑'))),
     h('textarea', { class: 'area', rows: 4, placeholder: 'Любой текст: что делали, сообщение от тренера…', oninput: (e) => { it.text = e.target.value; touch(w); } }, it.text || ''),
     h('div', { class: 'tools' }, ...mediaButtons(it, w, ctx.rerender)),
     linkStrip(it, w, ctx.rerender),
     mediaStrip(it, w, ctx.rerender));
 }
+const fmtT = (t) => `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`;
+const tabataTotal = (it) => (it.work || 0) * (it.rounds || 0) + (it.rest || 0) * Math.max((it.rounds || 1) - 1, 0);
+
+/** Настройка табаты: формат, работа / отдых / раунды со стрелками, список движений */
+function tabataDialog(w, it, ctx) {
+  const D = { format: it.format || 'Табата', work: it.work ?? 20, rest: it.rest ?? 10, rounds: it.rounds ?? 8, moves: it.moves || '' };
+  const total = h('b', {});
+  const upd = () => { total.textContent = tabataTotal(D) ? fmtT(tabataTotal(D)) : '—'; };
+  const stepper = (key, label, unit, step, min) => {
+    const val = h('input', { class: 'tb-val', inputmode: 'numeric', 'aria-label': label, value: D[key], onfocus: (e) => e.target.select(), oninput: (e) => { D[key] = Math.max(min, Number(e.target.value) || 0); upd(); } });
+    const bump = (d) => { D[key] = Math.max(min, (Number(D[key]) || 0) + d); val.value = D[key]; upd(); };
+    return h('div', { class: 'tb-step' }, h('small', { class: 'muted' }, label),
+      h('div', { class: 'tb-ctl' }, h('button', { class: 'tb-btn', 'aria-label': `${label} меньше`, onclick: () => bump(-step) }, '−'), val, h('button', { class: 'tb-btn', 'aria-label': `${label} больше`, onclick: () => bump(step) }, '+')),
+      h('small', { class: 'muted' }, unit));
+  };
+  const fmtRow = h('div', { class: 'pf' });
+  const paintFmt = () => fmtRow.replaceChildren(...['Табата', 'EMOM', 'AMRAP', 'Круговая', 'Другое'].map((f) => h('button', { class: 'pill' + (D.format === f ? ' on' : ''), onclick: () => { D.format = f; paintFmt(); } }, f)));
+  paintFmt(); upd();
+  modal((close) => h('div', {}, h('h3', {}, 'Настройка таймера'), fmtRow,
+    h('div', { class: 'tb-steppers' }, stepper('work', 'Работа', 'сек', 5, 5), stepper('rest', 'Отдых', 'сек', 5, 0), stepper('rounds', 'Раунды', '', 1, 1)),
+    h('div', { class: 'tb-total' }, h('span', { class: 'muted' }, 'Всего'), total),
+    h('label', { class: 'fld wide' }, h('span', {}, 'Движения (по одному в строке)'), h('textarea', { class: 'area', rows: 5, placeholder: 'Берпи\nСкалолаз\nПрыжки…', oninput: (e) => { D.moves = e.target.value; } }, D.moves)),
+    h('div', { class: 'row end' }, h('button', { class: 'btn', onclick: close }, 'Отмена'),
+      h('button', { class: 'btn primary', onclick: () => { Object.assign(it, D); touch(w); close(); ctx.rerender(); } }, 'Сохранить'))));
+}
+
 function intervalCard(w, it, ctx) {
-  const numIn = (key, label) => h('label', { class: 'fld' }, h('span', {}, label),
-    h('input', { class: 'num', inputmode: 'numeric', value: it[key] ?? '', oninput: (e) => { it[key] = e.target.value === '' ? null : Number(e.target.value); touch(w); } }));
-  const total = (it.work || 0) * (it.rounds || 0) + (it.rest || 0) * Math.max((it.rounds || 1) - 1, 0);
-  return h('article', { class: 'card ex interval' },
+  const moves = (it.moves || '').split('\n').map((x) => x.trim()).filter(Boolean);
+  const total = tabataTotal(it);
+  const chip = (t) => h('button', { class: 'chip tb-chip', onclick: () => tabataDialog(w, it, ctx) }, t);
+  const row = (label, summary, open, ...inner) => {
+    const d = h('details', { class: 'tb-row', open }, h('summary', {}, h('span', {}, label), h('span', { class: 'muted tb-sum' }, summary || 'добавить')), ...inner);
+    return d;
+  };
+  return h('article', { class: 'card ex interval tabata' },
     h('header', { class: 'ex-head' }, h('input', { class: 'title-in', placeholder: 'Название', value: it.title || '', oninput: (e) => { it.title = e.target.value; touch(w); } }),
-      h('div', { class: 'ex-tools' }, h('button', { class: 'ico', onclick: () => ctx.move(it, -1) }, '↑'), h('button', { class: 'ico', onclick: () => ctx.move(it, 1) }, '↓'), h('button', { class: 'ico', onclick: () => itemMenu(w, it, ctx) }, '⋯'))),
-    h('div', { class: 'grid4' },
-      h('label', { class: 'fld' }, h('span', {}, 'Формат'), h('select', { class: 'sel', value: it.format || 'Табата', onchange: (e) => { it.format = e.target.value; touch(w); } },
-        ['Табата', 'EMOM', 'AMRAP', 'Круговая', 'Другое'].map((o) => h('option', { value: o }, o)))),
-      numIn('work', 'Работа, с'), numIn('rest', 'Отдых, с'), numIn('rounds', 'Раундов')),
-    h('div', { class: 'row' },
-      it.work && it.rounds ? h('button', { class: 'btn primary', onclick: () => openTimer({ title: it.title || it.format, work: it.work, rest: it.rest || 0, rounds: it.rounds, moves: (it.moves || '').split('\n').map((s) => s.trim()).filter(Boolean) }) }, `▶ Таймер · ${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`) : h('small', { class: 'muted' }, 'Заполни работу и раунды — появится таймер')),
-    h('label', { class: 'fld wide' }, h('span', {}, 'Движения (по одному в строке)'), h('textarea', { class: 'area', rows: 4, oninput: (e) => { it.moves = e.target.value; touch(w); } }, it.moves || '')),
-    h('label', { class: 'fld wide' }, h('span', {}, 'Описание / сообщение от тренера'), h('textarea', { class: 'area', rows: 3, oninput: (e) => { it.text = e.target.value; touch(w); } }, it.text || '')),
-    h('label', { class: 'fld wide' }, h('span', {}, 'Результат (сколько сделала, как зашло)'), h('input', { class: 'note-in', value: it.result || '', oninput: (e) => { it.result = e.target.value; touch(w); } })),
+      h('div', { class: 'ex-tools' }, h('button', { class: 'ico', title: 'Выше', onclick: () => ctx.move(it, -1) }, '↑'), h('button', { class: 'ico', title: 'Ниже', onclick: () => ctx.move(it, 1) }, '↓'),
+        h('button', { class: 'ico del', title: 'Удалить блок', 'aria-label': 'Удалить блок', onclick: () => ctx.remove(it) }, '🗑'))),
+    h('div', { class: 'chips' }, chip(it.format || 'Табата'), chip(`${it.work || 0} с работа`), chip(`${it.rest || 0} с отдых`), chip(`${it.rounds || 0} ${plural(it.rounds || 0, ['раунд', 'раунда', 'раундов'])}`), total ? chip(fmtT(total)) : null,
+      h('button', { class: 'ico', title: 'Настроить', 'aria-label': 'Настроить', onclick: () => tabataDialog(w, it, ctx) }, '✎')),
+    moves.length ? h('ol', { class: 'tb-moves' }, moves.map((m) => h('li', {}, m))) : h('button', { class: 'btn small', onclick: () => tabataDialog(w, it, ctx) }, '＋ Добавить движения'),
+    it.work && it.rounds ? h('button', { class: 'btn primary tb-start', onclick: () => openTimer({ title: it.title || it.format, work: it.work, rest: it.rest || 0, rounds: it.rounds, moves }) }, `▶ Старт таймера · ${fmtT(total)}`) : null,
+    row('Результат', it.result, !!it.result, h('input', { class: 'note-in', placeholder: 'Сколько сделала, как зашло', value: it.result || '', oninput: (e) => { it.result = e.target.value; touch(w); } })),
+    row('Описание от тренера', it.text ? it.text.split('\n')[0].slice(0, 30) : '', !!it.text, h('textarea', { class: 'area', rows: 3, oninput: (e) => { it.text = e.target.value; touch(w); } }, it.text || '')),
     h('div', { class: 'tools' }, ...mediaButtons(it, w, ctx.rerender)),
     linkStrip(it, w, ctx.rerender),
     mediaStrip(it, w, ctx.rerender));
@@ -262,6 +281,10 @@ export function workoutView(id) {
   const root = h('div', { class: 'page workout' });
   const ctx = {
     rerender: () => { const y = window.scrollY; build(); window.scrollTo(0, y); },
+    remove: async (it) => {
+      const label = it.type === 'sets' ? `упражнение «${it.exercise}»` : `блок «${it.title || 'без названия'}»`;
+      if (await confirmBox(`Удалить ${label} из тренировки?`, 'Удалить')) { w.items = w.items.filter((x) => x !== it); touch(w); ctx.rerender(); }
+    },
     move: (it, d) => { const i = w.items.indexOf(it), j = i + d; if (j < 0 || j >= w.items.length) return; [w.items[i], w.items[j]] = [w.items[j], w.items[i]]; touch(w); ctx.rerender(); },
   };
 
@@ -273,7 +296,7 @@ export function workoutView(id) {
     } });
     const dateIn = h('input', { type: 'date', class: 'date-in', value: isISO(w.date) ? w.date : '', onchange: (e) => { if (isISO(e.target.value)) { w.date = e.target.value; touch(w); ctx.rerender(); } } });
     const head = h('section', { class: 'card wk-head' },
-      h('a', { class: 'back', href: '#/' }, '← Журнал'),
+      h('a', { class: 'back', href: '#/', 'aria-label': 'Назад', title: 'Назад' }, '←'),
       h('div', { class: 'row wrap actions' },
         h('button', { class: 'btn small primary', title: 'Картинка с подсветкой — в буфер обмена', onclick: () => shareWorkout(w) }, '📋 Поделиться'),
         h('span', { class: 'copy-wrap' }, h('button', { class: 'btn small', title: 'Скопировать тренировку на другую дату', onclick: () => { try { copyDate.showPicker(); } catch { copyDate.click(); } } }, '⧉ Копия'), copyDate),
@@ -291,7 +314,8 @@ export function workoutView(id) {
       h('section', { class: 'card' }, h('textarea', { class: 'area', rows: 2, placeholder: 'Заметка о тренировке (самочувствие, как прошла)', oninput: (e) => { w.note = e.target.value; touch(w); } }, w.note || '')));
   }
 
-  function removeWorkout() {
+  async function removeWorkout() {
+    if (!(await confirmBox(`Удалить тренировку «${wName(w) || w.date}» от ${fmtDate(w.date)}?`, 'Удалить'))) return;
     const snap = JSON.parse(JSON.stringify(w));
     deleteWorkout(w.id);
     location.hash = '#/';
