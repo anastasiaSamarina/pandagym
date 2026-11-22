@@ -62,7 +62,6 @@ function pullToRefresh() {
     if (y0 === null) return;
     bar.style.transform = ''; y0 = null;
     if (!ready) return;
-    if (!navigator.onLine) { toast('Нет связи — показываю сохранённые данные'); return; }
     if (!isConfigured()) { toast('Синхронизация не подключена (Настройки)'); return; }
     try { await syncNow(); toast('Обновлено'); } catch (e) { toast(e.message, 5000); }
   });

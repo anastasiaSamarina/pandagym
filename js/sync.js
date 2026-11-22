@@ -38,7 +38,7 @@ async function api(path, init = {}) {
   let r;
   try {
     r = await fetch(API + path, { ...init, cache: 'no-store', headers: { Authorization: 'Bearer ' + state.device.token, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', ...(init.headers || {}) } });
-  } catch (e) { logSync('error', `${init.method || 'GET'} ${path}: нет связи (${e && e.message})`); throw new SyncError('Нет связи с GitHub', 0); }
+  } catch (e) { logSync('error', `${init.method || 'GET'} ${path}: запрос не дошёл — ${e && e.name}: ${e && e.message}`); throw new SyncError(`Нет связи с GitHub (${(e && e.message) || 'запрос не прошёл'})`, 0); }
   return r;
 }
 /** Что именно ответил GitHub (его текст ошибки сильно помогает искать причину) */
@@ -109,7 +109,8 @@ export function syncNow() {
 
 async function doSync() {
   if (!isConfigured()) { setSync('off'); return; }
-  if (!navigator.onLine) { setSync(state.db.rev !== state.device.syncedRev ? 'pending' : 'offline', 'Нет связи'); throw new SyncError('Нет связи', 0); }
+  // navigator.onLine на телефонах бывает ложно «false» (VPN, экономия трафика) — поэтому просто пробуем, а о связи судим по ответу
+  if (navigator.onLine === false) logSync('warn', 'Браузер считает, что связи нет (navigator.onLine=false), но всё равно пробуем');
   setSync('syncing');
   try {
     logSync('info', `Синхронизация: ${isJson() ? 'JSON' : 'Excel'}, локально тренировок ${state.db.workouts.length}`);
@@ -164,7 +165,7 @@ async function uploadMedia() {
 /** Картинка по id: сначала локально, иначе скачиваем из репозитория и запоминаем */
 export async function mediaUrl(id) {
   let m = await getMedia(id);
-  if (!m && isConfigured() && navigator.onLine) {
+  if (!m && isConfigured()) {
     try { const f = await getFile('media/' + id); if (f) { await putMedia(id, new Blob([f.bytes], { type: mimeOf(id) }), true); m = await getMedia(id); } } catch { /* покажем заглушку */ }
   }
   return m ? URL.createObjectURL(m.blob) : null;
@@ -173,10 +174,10 @@ const mimeOf = (id) => (/\.gif$/i.test(id) ? 'image/gif' : /\.png$/i.test(id) ? 
 
 // ---------- автозапуск ----------
 export function startAutoSync() {
-  const soon = debounce(() => { if (isConfigured()) { if (!navigator.onLine) setSync('pending', 'Нет связи'); else syncNow().catch(() => {}); } }, 4000);
+  const soon = debounce(() => { if (isConfigured()) syncNow().catch(() => {}); }, 4000);
   hooks.requestSync = () => { if (isConfigured()) { if (state.sync.state !== 'syncing') setSync('pending'); soon(); } };
   addEventListener('online', () => isConfigured() && syncNow().catch(() => {}));
-  addEventListener('offline', () => isConfigured() && setSync(state.db.rev !== state.device.syncedRev ? 'pending' : 'offline', 'Нет связи'));
-  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && isConfigured() && navigator.onLine) syncNow().catch(() => {}); });
-  if (isConfigured()) { setSync(navigator.onLine ? 'idle' : 'offline'); if (navigator.onLine) syncNow().catch(() => {}); }
+  addEventListener('offline', () => { if (isConfigured()) logSync('warn', 'Браузер сообщил: связь пропала'); });
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && isConfigured()) syncNow().catch(() => {}); });
+  if (isConfigured()) { setSync('idle'); syncNow().catch(() => {}); }
 }
