@@ -1,10 +1,12 @@
 // Экран тренировки: ввод, редактирование, сравнение с прошлым разом (зелёный/красный).
 import { h, refresh, toast, modal, confirmBox, fmtDate, fmtNum, parseInput, todayISO, uid, nowISO, isISO, plural, WD, weekdayIdx } from './util.js';
 import { state, touch, markChanged, deleteWorkout, putMedia } from './store.js';
-import { compareItem, exMeta, ensureExercise, findExercise, historyOf, setsLine, filledSets, nameKey, similarTo, DAY_LABELS } from './model.js';
+import { compareItem, exMeta, ensureExercise, findExercise, historyOf, setsLine, filledSets, nameKey, similarTo, wName, fieldsOf, tempoText, normName } from './model.js';
 import { shareWorkout } from './share.js';
-import { mediaUrl } from './sync.js';
 import { openTimer } from './timer.js';
+import { startRest } from './rest.js';
+import { mediaStrip, linkStrip, mediaButtons } from './media-ui.js';
+import { mergeDialog } from './view-settings.js';
 
 const clone = (x) => JSON.parse(JSON.stringify(x));
 
@@ -21,45 +23,6 @@ export function dropIfEmpty(id) {
   if (w && !w.items.length && !w.plan && !w.note) { db.workouts = db.workouts.filter((x) => x.id !== id); markChanged(); }
 }
 
-// ---------- картинки/гифки ----------
-async function shrinkImage(file) {
-  if (file.type === 'image/gif') {
-    if (file.size > 8 * 1024 * 1024) throw new Error('GIF больше 8 МБ — сожми его или сохрани ссылкой в комментарии');
-    return { blob: file, ext: '.gif' };
-  }
-  const bmp = await createImageBitmap(file);
-  const k = Math.min(1, 1280 / Math.max(bmp.width, bmp.height));
-  const cv = document.createElement('canvas');
-  cv.width = Math.round(bmp.width * k); cv.height = Math.round(bmp.height * k);
-  cv.getContext('2d').drawImage(bmp, 0, 0, cv.width, cv.height);
-  const blob = await new Promise((r) => cv.toBlob(r, 'image/jpeg', 0.82));
-  return { blob, ext: '.jpg' };
-}
-function attachMedia(it, w, rerender) {
-  const input = h('input', { type: 'file', accept: 'image/*', style: 'display:none' });
-  input.addEventListener('change', async () => {
-    const f = input.files[0]; if (!f) return;
-    try {
-      const { blob, ext } = await shrinkImage(f);
-      const id = uid('m') + ext;
-      await putMedia(id, blob, false);
-      (it.media ||= []).push(id);
-      touch(w); rerender();
-    } catch (e) { toast(e.message || 'Не удалось добавить картинку'); }
-  });
-  document.body.append(input); input.click(); setTimeout(() => input.remove(), 60000);
-}
-function mediaStrip(it, w, rerender) {
-  if (!it.media || !it.media.length) return null;
-  return h('div', { class: 'media-strip' }, it.media.map((id) => {
-    const img = h('img', { alt: '', class: 'thumb', onclick: () => img.src && openImage(img.src) });
-    mediaUrl(id).then((u) => { if (u) img.src = u; else img.replaceWith(h('div', { class: 'thumb missing' }, 'нет файла')); });
-    return h('div', { class: 'thumb-wrap' }, img,
-      h('button', { class: 'x', title: 'Убрать', onclick: () => { it.media = it.media.filter((m) => m !== id); touch(w); rerender(); } }, '✕'));
-  }), );
-}
-function openImage(src) { modal((close) => h('img', { src, class: 'big-img', onclick: close })); }
-
 // ---------- добавление упражнения ----------
 function addDialog(w, rerender, replaceIt = null) {
   const db = state.db;
@@ -73,7 +36,9 @@ function addDialog(w, rerender, replaceIt = null) {
     if (replaceIt) { replaceIt.exercise = e.name; touch(w); close(); rerender(); return; }
     const last = historyOf(db, e.name).pop();
     const rounds = last ? filledSets(last.it).length : 3;
-    w.items.push({ type: 'sets', exercise: e.name, mode: last ? last.it.mode : mode || 'weighted', note: '', sets: Array.from({ length: rounds }, () => ({ w: null, r: null, note: '' })), media: [] });
+    const item = { type: 'sets', exercise: e.name, mode: last ? last.it.mode : mode || 'weighted', note: '', sets: Array.from({ length: rounds }, () => ({ w: null, r: null, note: '' })), media: [] };
+    if (last) { if (last.it.fields) item.fields = clone(last.it.fields); if (last.it.tempo) item.tempo = [...last.it.tempo]; if (last.it.links) item.links = [...last.it.links]; }
+    w.items.push(item);
     touch(w); close(); rerender();
   };
   const last = (e) => historyOf(db, e.name).pop();
@@ -126,7 +91,8 @@ const mark = (el, cls) => { el.classList.remove('better', 'worse', 'same'); if (
 function setsCard(w, it, ctx) {
   const db = state.db, meta = exMeta(db, it.exercise);
   const cmp0 = compareItem(db, w, it), prev = cmp0.prev;
-  const weighted = it.mode !== 'bodyweight';
+  const F = fieldsOf(it);
+  const weighted = F.w;
   const chip = h('div', { class: 'chips' });
   const rows = [];
   const tbody = h('tbody');
@@ -150,16 +116,17 @@ function setsCard(w, it, ctx) {
     chip.replaceChildren(...parts);
   };
 
+  const cols = (weighted ? 1 : 0) + (F.r ? 1 : 0);
   function buildRow(s, i) {
     const p = prev && prev.it.sets[i];
     const wIn = weighted ? h('input', { class: 'num', inputmode: 'decimal', 'aria-label': 'Вес', value: fmtNum(s.w), placeholder: p ? fmtNum(p.w) : '', onfocus: (e) => e.target.select(), oninput: (e) => { s.w = parseInput(e.target.value); touch(w); paint(); } }) : null;
-    const rIn = h('input', { class: 'num', inputmode: 'decimal', 'aria-label': meta.unit === 'sec' ? 'Секунды' : 'Повторы', value: fmtNum(s.r), placeholder: p ? fmtNum(p.r) : '', onfocus: (e) => e.target.select(), oninput: (e) => { s.r = parseInput(e.target.value); touch(w); paint(); } });
+    const rIn = F.r ? h('input', { class: 'num', inputmode: 'decimal', 'aria-label': meta.unit === 'sec' ? 'Секунды' : 'Повторы', value: fmtNum(s.r), placeholder: p ? fmtNum(p.r) : '', onfocus: (e) => e.target.select(), oninput: (e) => { s.r = parseInput(e.target.value); touch(w); paint(); } }) : null;
     const noteIn = h('input', { class: 'note-in', placeholder: 'Комментарий к кругу (например: с резинкой)', value: s.note || '', oninput: (e) => { s.note = e.target.value; touch(w); } });
-    const noteRow = h('tr', { class: 'note-row' }, h('td', {}), h('td', { colspan: weighted ? 4 : 3 }, noteIn));
+    const noteRow = h('tr', { class: 'note-row' }, h('td', {}), h('td', { colspan: cols + 1 }, noteIn));
     if (!s.note) noteRow.hidden = true;
-    rows.push({ w: wIn || document.createElement('i'), r: rIn });
+    rows.push({ w: wIn || document.createElement('i'), r: rIn || document.createElement('i') });
     return [
-      h('tr', {}, h('td', { class: 'n' }, i + 1), weighted ? h('td', {}, wIn) : null, h('td', {}, rIn),
+      h('tr', {}, h('td', { class: 'n' }, i + 1), weighted ? h('td', {}, wIn) : null, F.r ? h('td', {}, rIn) : null,
         h('td', { class: 'acts' },
           h('button', { class: 'ico' + (s.note ? ' on' : ''), title: 'Комментарий', onclick: () => { noteRow.hidden = !noteRow.hidden; if (!noteRow.hidden) noteIn.focus(); } }, '💬'),
           h('button', { class: 'ico', title: 'Удалить круг', onclick: () => { if (it.sets.length > 1) { it.sets.splice(i, 1); touch(w); ctx.rerender(); } } }, '✕'))),
@@ -167,26 +134,74 @@ function setsCard(w, it, ctx) {
   }
   it.sets.forEach((s, i) => tbody.append(...buildRow(s, i)));
 
-  const prevLine = prev ? h('div', { class: 'prev' }, `Прошлый раз · ${fmtDate(prev.w.date, false)}: `, h('span', {}, setsLine(prev.it.sets))) : null;
+  const prevLine = prev ? h('div', { class: 'prev' }, `Прошлый раз · ${fmtDate(prev.w.date, false)}: `, h('span', {}, setsLine(prev.it.sets)), prev.it.tempo && tempoText(prev.it) ? ` · темп ${tempoText(prev.it)}` : '') : null;
   const unit = meta.unit === 'sec' ? 'Сек' : 'Повт';
   const star = h('button', { class: 'ico star', title: 'В избранное (следить в Аналитике)', onclick: (ev) => { const e = ensureExercise(db, it.exercise); e.fav = !e.fav; markChanged(); ev.target.textContent = e.fav ? '★' : '☆'; } }, meta.fav ? '★' : '☆');
+  // темп: 4 числа — подъём, пауза вверху, опускание, пауза внизу
+  const tempoLabels = ['Вверх, с', 'Пауза, с', 'Вниз, с', 'Пауза, с'];
+  const tempoRow = F.t ? h('div', { class: 'tempo' }, h('small', { class: 'muted' }, 'Темп'),
+    h('div', { class: 'tempo-grid' }, tempoLabels.map((l, k) => h('label', { class: 'fld' }, h('span', {}, l),
+      h('input', { class: 'num', inputmode: 'decimal', value: it.tempo && it.tempo[k] !== undefined && it.tempo[k] !== null ? it.tempo[k] : '', placeholder: '0', onfocus: (e) => e.target.select(),
+        oninput: (e) => { it.tempo = it.tempo || [null, null, null, null]; it.tempo[k] = parseInput(e.target.value); touch(w); } }))))) : null;
+  const restSec = Number(db.settings.restSec) || 60;
   const card = h('article', { class: 'card ex' },
     h('header', { class: 'ex-head' },
-      h('div', { class: 'ex-title' }, h('a', { class: 'ex-name', href: '#/analytics/' + encodeURIComponent(it.exercise) }, it.exercise), star),
+      h('div', { class: 'ex-title' }, h('a', { class: 'ex-name', href: '#/analytics/' + encodeURIComponent(it.exercise) }, it.exercise),
+        h('button', { class: 'ico', title: 'Изменить название', 'aria-label': 'Изменить название', onclick: () => renameDialog(w, it, ctx) }, '✎'), star),
       h('div', { class: 'ex-tools' },
         h('button', { class: 'ico', title: 'Выше', onclick: () => ctx.move(it, -1) }, '↑'),
         h('button', { class: 'ico', title: 'Ниже', onclick: () => ctx.move(it, 1) }, '↓'),
         h('button', { class: 'ico', title: 'Ещё', onclick: () => itemMenu(w, it, ctx) }, '⋯'))),
-    chip, prevLine,
+    chip, prevLine, tempoRow,
     h('table', { class: 'sets' },
-      h('thead', {}, h('tr', {}, h('th', {}, 'Круг'), weighted ? h('th', {}, 'Вес, кг') : null, h('th', {}, unit), h('th', {}))),
+      h('thead', {}, h('tr', {}, h('th', {}, 'Круг'), weighted ? h('th', {}, 'Вес, кг') : null, F.r ? h('th', {}, unit) : null, h('th', {}))),
       tbody),
-    h('div', { class: 'row' },
-      h('button', { class: 'btn small', onclick: () => { const l = it.sets[it.sets.length - 1] || {}; it.sets.push({ w: l.w ?? null, r: l.r ?? null, note: '' }); touch(w); ctx.rerender(); } }, '＋ круг')),
+    h('div', { class: 'tools' },
+      h('button', { class: 'btn small', onclick: () => { const l = it.sets[it.sets.length - 1] || {}; it.sets.push({ w: l.w ?? null, r: l.r ?? null, note: '' }); touch(w); ctx.rerender(); } }, '＋ круг'),
+      h('button', { class: 'btn small', title: 'Таймер отдыха (время меняется в Настройках)', onclick: () => startRest(restSec) }, `⏱ Отдых ${restSec} с`),
+      ...mediaButtons(it, w, ctx.rerender),
+      h('button', { class: 'btn small', title: 'Что вводить в этом упражнении', onclick: () => fieldsDialog(w, it, ctx) }, '⚙ Поля')),
     h('input', { class: 'note-in', placeholder: 'Комментарий к упражнению', value: it.note || '', oninput: (e) => { it.note = e.target.value; touch(w); } }),
+    linkStrip(it, w, ctx.rerender),
     mediaStrip(it, w, ctx.rerender));
   paint();
   return card;
+}
+
+/** Переименовать упражнение в этой тренировке (или сразу везде) */
+function renameDialog(w, it, ctx) {
+  const db = state.db;
+  const input = h('input', { class: 'txt', value: it.exercise });
+  modal((close) => h('div', {}, h('h3', {}, 'Название упражнения'),
+    h('p', { class: 'muted' }, 'Изменится только в этой тренировке. Если упражнение везде называется неправильно — нажми «Переименовать везде».'), input,
+    h('div', { class: 'row wrap end' },
+      h('button', { class: 'btn', onclick: () => { const n = it.exercise; close(); mergeDialog(n, '', (nn) => { ctx.rerender(); void nn; }); } }, 'Переименовать везде…'),
+      h('button', { class: 'btn primary', onclick: () => {
+        const name = normName(input.value); if (!name) return;
+        if (name !== it.exercise) {
+          const e = ensureExercise(db, name); it.exercise = e.name; touch(w);
+          toast(`Теперь «${e.name}» — только в этой тренировке`);
+        }
+        close(); ctx.rerender();
+      } }, 'Сохранить'))));
+  setTimeout(() => { input.focus(); input.select(); }, 50);
+}
+
+/** Что вводится в упражнении: вес, повторы, темп */
+function fieldsDialog(w, it, ctx) {
+  const db = state.db, F = fieldsOf(it), meta = exMeta(db, it.exercise);
+  const box = (label, on, hint) => { const c = h('input', { type: 'checkbox', checked: on }); return { c, el: h('label', { class: 'chk big' }, c, h('span', {}, h('b', {}, label), hint ? h('small', { class: 'muted' }, hint) : null)) }; };
+  const fw = box('Вес', F.w, 'гантели, штанга, тренажёр. Для упражнений со своим весом — выключи'), fr = box('Повторы', F.r, 'сколько раз (или секунд — выбери ниже)'), ft = box('Темп', F.t, 'сколько секунд вверх, пауза, вниз, пауза');
+  const unit = h('select', { class: 'sel', value: meta.unit }, h('option', { value: 'reps' }, 'повторы'), h('option', { value: 'sec' }, 'секунды'));
+  modal((close) => h('div', {}, h('h3', {}, 'Что вводить в упражнении'), h('p', { class: 'muted' }, `«${it.exercise}». Круги добавляются кнопкой «＋ круг». Уже введённые значения не пропадут, даже если поле скрыть.`),
+    fw.el, fr.el, ft.el, h('label', { class: 'fld' }, h('span', {}, 'Считать в (для этого упражнения во всех тренировках)'), unit),
+    h('div', { class: 'row end' }, h('button', { class: 'btn', onclick: close }, 'Отмена'), h('button', { class: 'btn primary', onclick: () => {
+      if (!fw.c.checked && !fr.c.checked) { toast('Нужно хотя бы одно поле: вес или повторы'); return; }
+      it.fields = { w: fw.c.checked, r: fr.c.checked, t: ft.c.checked };
+      it.mode = it.fields.w ? 'weighted' : 'bodyweight';
+      const e = ensureExercise(db, it.exercise); e.unit = unit.value;
+      touch(w); markChanged(); close(); ctx.rerender();
+    } }, 'Сохранить'))));
 }
 
 function itemMenu(w, it, ctx) {
@@ -195,8 +210,6 @@ function itemMenu(w, it, ctx) {
   modal((c) => {
     close = c;
     return h('div', { class: 'menu' }, h('h3', {}, it.exercise || it.title || 'Блок'),
-      act('📷 Добавить фото / GIF', () => attachMedia(it, w, ctx.rerender)),
-      it.type === 'sets' ? act(it.mode === 'bodyweight' ? '🏋 Добавить вес' : '🧍 Убрать вес (свой вес)', () => { it.mode = it.mode === 'bodyweight' ? 'weighted' : 'bodyweight'; touch(w); ctx.rerender(); }) : null,
       it.type === 'sets' ? act('🔁 Заменить упражнение', () => addDialog(w, ctx.rerender, it)) : null,
       act('🗑 Удалить из тренировки', async () => { if (await confirmBox('Удалить блок из тренировки?')) { w.items = w.items.filter((x) => x !== it); touch(w); ctx.rerender(); } }));
   });
@@ -205,9 +218,11 @@ function itemMenu(w, it, ctx) {
 // ---------- свободный и интервальный блоки ----------
 function freeCard(w, it, ctx) {
   return h('article', { class: 'card ex' },
-    h('header', { class: 'ex-head' }, h('input', { class: 'title-in', placeholder: 'Название (например: Кардио, Табата 12.11)', value: it.title || '', oninput: (e) => { it.title = e.target.value; touch(w); } }),
+    h('header', { class: 'ex-head' }, h('input', { class: 'title-in', placeholder: 'Название блока', value: it.title || '', oninput: (e) => { it.title = e.target.value; touch(w); } }),
       h('div', { class: 'ex-tools' }, h('button', { class: 'ico', onclick: () => ctx.move(it, -1) }, '↑'), h('button', { class: 'ico', onclick: () => ctx.move(it, 1) }, '↓'), h('button', { class: 'ico', onclick: () => itemMenu(w, it, ctx) }, '⋯'))),
-    h('textarea', { class: 'area', rows: 4, placeholder: 'Любой текст: что делали, ссылка на видео, сообщение от тренера…', oninput: (e) => { it.text = e.target.value; touch(w); } }, it.text || ''),
+    h('textarea', { class: 'area', rows: 4, placeholder: 'Любой текст: что делали, сообщение от тренера…', oninput: (e) => { it.text = e.target.value; touch(w); } }, it.text || ''),
+    h('div', { class: 'tools' }, ...mediaButtons(it, w, ctx.rerender)),
+    linkStrip(it, w, ctx.rerender),
     mediaStrip(it, w, ctx.rerender));
 }
 function intervalCard(w, it, ctx) {
@@ -226,13 +241,15 @@ function intervalCard(w, it, ctx) {
     h('label', { class: 'fld wide' }, h('span', {}, 'Движения (по одному в строке)'), h('textarea', { class: 'area', rows: 4, oninput: (e) => { it.moves = e.target.value; touch(w); } }, it.moves || '')),
     h('label', { class: 'fld wide' }, h('span', {}, 'Описание / сообщение от тренера'), h('textarea', { class: 'area', rows: 3, oninput: (e) => { it.text = e.target.value; touch(w); } }, it.text || '')),
     h('label', { class: 'fld wide' }, h('span', {}, 'Результат (сколько сделала, как зашло)'), h('input', { class: 'note-in', value: it.result || '', oninput: (e) => { it.result = e.target.value; touch(w); } })),
+    h('div', { class: 'tools' }, ...mediaButtons(it, w, ctx.rerender)),
+    linkStrip(it, w, ctx.rerender),
     mediaStrip(it, w, ctx.rerender));
 }
 
 // ---------- копирование на другую дату ----------
 function copyDialog(w) {
   const date = h('input', { type: 'date', value: todayISO(), class: 'date-in' });
-  modal((close) => h('div', {}, h('h3', {}, 'Скопировать тренировку'), h('p', { class: 'muted' }, `День ${w.day || ''} · ${fmtDate(w.date)} → на дату:`), date,
+  modal((close) => h('div', {}, h('h3', {}, 'Скопировать тренировку'), h('p', { class: 'muted' }, `${wName(w)} · ${fmtDate(w.date)} → на дату:`), date,
     h('div', { class: 'row end' }, h('button', { class: 'btn', onclick: close }, 'Отмена'),
       h('button', { class: 'btn primary', onclick: () => { if (!isISO(date.value)) return; const n = createWorkout({ date: date.value, from: w }); close(); location.hash = '#/w/' + n.id; } }, 'Скопировать'))));
 }
@@ -249,7 +266,6 @@ export function workoutView(id) {
   };
 
   function build() {
-    const days = [...new Set([...DAY_LABELS, ...db.workouts.map((x) => x.day).filter(Boolean)])];
     const copyDate = h('input', { type: 'date', class: 'hidden-date', value: todayISO(), 'aria-label': 'Дата копии', onchange: (e) => {
       if (!isISO(e.target.value)) return;
       const n = createWorkout({ date: e.target.value, from: w });
@@ -260,17 +276,14 @@ export function workoutView(id) {
       h('a', { class: 'back', href: '#/' }, '← Журнал'),
       h('div', { class: 'row wrap actions' },
         h('button', { class: 'btn small primary', title: 'Картинка с подсветкой — в буфер обмена', onclick: () => shareWorkout(w) }, '📋 Поделиться'),
-        h('button', { class: 'btn small', title: 'Картинка без цветной подсветки', onclick: () => shareWorkout(w, { withColors: false }) }, '🖼 Без цвета'),
         h('span', { class: 'copy-wrap' }, h('button', { class: 'btn small', title: 'Скопировать тренировку на другую дату', onclick: () => { try { copyDate.showPicker(); } catch { copyDate.click(); } } }, '⧉ Копия'), copyDate),
         h('button', { class: 'btn small danger', title: 'Удалить тренировку', 'aria-label': 'Удалить', onclick: removeWorkout }, '🗑')),
-      h('div', { class: 'row wrap' }, dateIn, h('span', { class: 'muted' }, isISO(w.date) ? WD[weekdayIdx(w.date)] : 'без даты')),
-      h('div', { class: 'row wrap' }, h('span', { class: 'muted' }, 'День:'),
-        days.map((d) => h('button', { class: 'pill' + (w.day === d ? ' on' : ''), onclick: () => { w.day = w.day === d ? '' : d; touch(w); ctx.rerender(); } }, d)),
-        h('input', { class: 'day-in', placeholder: 'другое', maxlength: 12, value: days.includes(w.day) ? '' : w.day, onchange: (e) => { w.day = e.target.value.trim(); touch(w); ctx.rerender(); } })),
-      h('div', { class: 'row wrap' }, h('span', { class: 'muted' }, 'Цикл:'),
-        h('select', { class: 'sel', value: w.cycle, onchange: (e) => { w.cycle = e.target.value; touch(w); } }, db.settings.cycles.map((c) => h('option', { value: c }, c)))),
-      h('details', { class: 'plan', open: !!w.plan }, h('summary', {}, 'План от тренера (вставь сообщение целиком)'),
-        h('textarea', { class: 'area', rows: 6, placeholder: 'Сообщение тренера: упражнения, подходы, комментарии…', oninput: (e) => { w.plan = e.target.value; touch(w); } }, w.plan || '')));
+      h('label', { class: 'fld' }, h('span', {}, 'Название'),
+        h('input', { class: 'title-in', placeholder: `Тренировка ${w.date}`, value: (w.day && w.day.length <= 2) ? `День ${w.day}` : w.day || '', oninput: (e) => { w.day = e.target.value; touch(w); } })),
+      h('div', { class: 'row wrap' }, dateIn, h('span', { class: 'muted' }, isISO(w.date) ? WD[weekdayIdx(w.date)] : 'без даты'),
+        h('select', { class: 'sel', 'aria-label': 'Цикл', value: w.cycle, onchange: (e) => { w.cycle = e.target.value; touch(w); } }, db.settings.cycles.map((c) => h('option', { value: c }, c)))),
+      h('label', { class: 'fld' }, h('span', {}, 'Описание'),
+        h('textarea', { class: 'area', rows: 3, placeholder: 'Что угодно: сообщение тренера, задача на тренировку, самочувствие…', oninput: (e) => { w.plan = e.target.value; touch(w); } }, w.plan || '')));
 
     const cards = w.items.map((it) => (it.type === 'sets' ? setsCard(w, it, ctx) : it.type === 'interval' ? intervalCard(w, it, ctx) : freeCard(w, it, ctx)));
     root.replaceChildren(head, ...cards,

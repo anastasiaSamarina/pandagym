@@ -144,3 +144,28 @@ input.note-in { min-height: 38px; font-size: .9rem; margin-top: 6px; }
 .actions { gap: 6px; } .copy-wrap { position: relative; display: inline-block; } .hidden-date { position: absolute; left: 0; bottom: 0; width: 1px; height: 1px; opacity: 0; pointer-events: none; border: 0; padding: 0; }
 #toast.act { pointer-events: auto; } .toast-act { margin-left: 12px; border: 0; background: transparent; color: #9fd0ff; font-weight: 700; cursor: pointer; }
 .month-bar b { text-align: center; } .month-card { padding: 8px 12px; }
+
+/* ---------- v3: отступы на телефоне, инструменты упражнения, видео, таймер отдыха ---------- */
+.card.ex > * + *, .wk-head > * + * { margin-top: 10px; }
+.card.ex > table.sets { margin: 8px 0 0; } .card.ex > .chips, .card.ex > .prev { margin-top: 6px; margin-bottom: 0; }
+.card.ex > .ex-head + *, .card.ex > .chips + * { margin-top: 8px; }
+.card .fld { margin: 0; } .card.ex .fld, .wk-head .fld { margin-top: 10px; }
+.ex-head .title-in { flex: 1; min-width: 0; } .ex-head { gap: 8px; }
+.ex-title .ico { opacity: .8; }
+.tools { display: flex; flex-wrap: wrap; gap: 8px; } .tools .btn.small { flex: 0 0 auto; }
+.tempo-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; } .tempo-grid .fld { margin: 0; } .tempo-grid input.num { padding: 6px 2px; }
+.links { display: flex; flex-direction: column; gap: 8px; } .link-row { border: 1px solid var(--line); border-radius: 12px; padding: 4px 10px; } .link-row .row { margin: 4px 0; }
+.link-row a.link { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.video-box { margin: 6px 0 8px; } .video-frame { width: 100%; aspect-ratio: 16 / 9; border: 0; border-radius: 10px; background: #000; display: block; }
+.chk.big { align-items: flex-start; gap: 10px; margin: 12px 0; } .chk.big input { margin-top: 2px; flex: none; } .chk.big span { display: flex; flex-direction: column; gap: 2px; }
+.pick-list.compact { gap: 4px; max-height: 38vh; } .pick-list.compact .pick { padding: 7px 10px; } .pick-list.compact .pick b { font-size: .92rem; } .pick-list.compact .pick small { font-size: .78rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.modal h4 { margin: 16px 0 6px; } .modal .fld { margin: 10px 0; } .modal > div > .btn.primary { margin: 6px 0 4px; } .modal .row.wrap .pill { margin: 0; }
+.dup-row { display: flex; flex-direction: column; gap: 6px; padding: 8px 0; border-top: 1px solid var(--line); } .dup-row .row { margin: 0; flex-wrap: wrap; }
+.month-bar { margin: 0 0 6px; } .month-card { padding: 6px 12px; }
+.log { padding: 6px 12px; } .log-row { display: grid; grid-template-columns: 18px 1fr; gap: 2px 8px; padding: 7px 0; border-top: 1px solid var(--line); font-size: .85rem; word-break: break-word; } .log-row:first-child { border-top: 0; }
+.log-row small { grid-column: 2; } .log-row span:last-child { grid-column: 2; } .log-row.error { color: var(--bad); } .log-row.warn { color: #b7791f; } .log-row.ok { color: var(--good); }
+.rest-bar { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(76px + env(safe-area-inset-bottom)); z-index: 60; display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: 99px; background: var(--text); color: var(--bg); box-shadow: 0 6px 24px rgba(0, 0, 0, .3); max-width: calc(100vw - 20px); }
+.rest-bar .rest-time { font-size: 1.5rem; font-variant-numeric: tabular-nums; min-width: 3.2ch; text-align: center; } .rest-bar .btn { background: transparent; color: inherit; border-color: rgba(255, 255, 255, .35); min-height: 36px; padding: 4px 10px; }
+.rest-bar.done { background: var(--good); color: #fff; animation: pulse 0.6s 3; } @keyframes pulse { 50% { transform: translateX(-50%) scale(1.06); } }
+@media (min-width: 900px) { .rest-bar { bottom: 24px; } }
+.sync-badge { cursor: pointer; }

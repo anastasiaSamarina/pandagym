@@ -1,7 +1,7 @@
 // Основные экраны: журнал (с календарём), аналитика, замеры.
 import { h, put, refresh, toast, modal, fmtDate, fmtNum, fmtShort, parseInput, todayISO, isISO, addDays, weekStart, weekdayIdx, parseISO, daysBetween, WD, MONTHS_NOM, isoDate, pad } from './util.js';
 import { state, markChanged } from './store.js';
-import { filledSets, exMeta, ensureExercise, findExercise, historyOf, setStats, plateau, weekCounts, weekStreak, workoutDates, setsLine, nameKey, num, similarExercises } from './model.js';
+import { filledSets, exMeta, ensureExercise, findExercise, historyOf, setStats, plateau, plateauCfg, weekCounts, weekStreak, workoutDates, setsLine, nameKey, num, similarExercises, wName, dayBadge } from './model.js';
 import { createWorkout } from './view-workout.js';
 import { lineChart, barChart, ring, sparkline, copyBtn } from './charts.js';
 import { importDialog, mergeDialog } from './view-settings.js';
@@ -14,30 +14,37 @@ export function newWorkoutDialog(date = todayISO()) {
   const dateIn = h('input', { type: 'date', class: 'date-in', value: date });
   const wdLabel = h('span', { class: 'muted' });
   const recent = [...db.workouts].filter((w) => isISO(w.date) && w.items.length).sort(byDateDesc).slice(0, 14);
+  // названия, которые уже встречались: быстро подставить «День А», «Ноги» и т.п.
+  const names = [...new Set(db.workouts.slice().sort(byDateDesc).map((w) => wName(w)).filter((n) => n !== 'Тренировка'))].slice(0, 6);
+  const nameIn = h('input', { class: 'txt', placeholder: `Тренировка ${date}`, maxlength: 60 });
   const box = h('div', {});
+  let showAll = false;
   modal((close) => {
     const go = (opts) => { if (!isISO(dateIn.value)) { toast('Выбери дату'); return; } const w = createWorkout({ ...opts, date: dateIn.value }); close(); location.hash = '#/w/' + w.id; };
     // подсказки пересчитываются при смене даты: «в понедельник копирую прошлый понедельник»
     const paint = () => {
       const d = isISO(dateIn.value) ? dateIn.value : date;
       wdLabel.textContent = WD[weekdayIdx(d)];
+      nameIn.placeholder = `Тренировка ${d}`;
       const same = recent.find((w) => weekdayIdx(w.date) === weekdayIdx(d) && w.date < d);
       const ordered = same ? [same, ...recent.filter((w) => w !== same)] : recent;
-      box.replaceChildren(
-        ordered.length ? h('div', {}, h('h4', {}, 'Скопировать прошлую'),
-          same ? null : h('small', { class: 'muted' }, `Раньше по ${WD[weekdayIdx(d)]} не занималась — показываю последние тренировки.`),
-          h('div', { class: 'pick-list' }, ordered.map((w, i) => h('button', { class: 'pick', onclick: () => go({ from: w }) },
-            h('b', {}, `День ${w.day || '?'} · ${fmtDate(w.date)}`,
-              w === same ? h('span', { class: 'chip' }, `тот же день недели (${WD[weekdayIdx(d)]})`) : (!same && i === 0 ? h('span', { class: 'chip' }, 'последняя') : null)),
-            h('small', {}, w.items.map((x) => x.exercise || x.title).filter(Boolean).slice(0, 4).join(', ')))))) : null,
-        h('h4', {}, 'С нуля'),
-        h('div', { class: 'row wrap' }, ['А', 'Б', 'С'].map((x) => h('button', { class: 'btn', onclick: () => go({ day: x }) }, `День ${x}`)),
-          h('button', { class: 'btn', onclick: () => go({}) }, 'Без названия')));
+      const shown = showAll ? ordered : ordered.slice(0, 3);
+      box.replaceChildren(ordered.length ? h('div', {}, h('h4', {}, 'Или скопировать прошлую'),
+        same ? null : h('small', { class: 'muted' }, `Раньше по ${WD[weekdayIdx(d)]} не занималась — последние тренировки:`),
+        h('div', { class: 'pick-list compact' }, shown.map((w, i) => h('button', { class: 'pick', onclick: () => go({ from: w }) },
+          h('b', {}, `${wName(w)} · ${fmtShort(w.date)}`,
+            w === same ? h('span', { class: 'chip' }, `тот же день недели (${WD[weekdayIdx(d)]})`) : (!same && i === 0 ? h('span', { class: 'chip' }, 'последняя') : null)),
+          h('small', {}, w.items.map((x) => x.exercise || x.title).filter(Boolean).slice(0, 3).join(', '))))),
+        ordered.length > 3 ? h('button', { class: 'btn small', onclick: () => { showAll = !showAll; paint(); } }, showAll ? 'Свернуть' : `Показать ещё ${ordered.length - 3}`) : null) : null);
     };
     dateIn.addEventListener('change', paint);
     paint();
     return h('div', {}, h('h3', {}, 'Новая тренировка'),
-      h('label', { class: 'fld' }, h('span', {}, 'Дата'), h('div', { class: 'row' }, dateIn, wdLabel)), box,
+      h('label', { class: 'fld' }, h('span', {}, 'Дата'), h('div', { class: 'row' }, dateIn, wdLabel)),
+      h('label', { class: 'fld' }, h('span', {}, 'Название'), nameIn),
+      names.length ? h('div', { class: 'row wrap' }, names.map((n) => h('button', { class: 'pill', onclick: () => { nameIn.value = n; nameIn.focus(); } }, n))) : null,
+      h('button', { class: 'btn primary', onclick: () => go({ day: nameIn.value.trim() || nameIn.placeholder }) }, 'Создать пустую'),
+      box,
       h('small', { class: 'muted' }, `Цикл: ${db.settings.currentCycle} (меняется в Настройках)`));
   });
 }
@@ -90,7 +97,7 @@ export function journalView() {
   for (let d = 1; d <= dim; d++) {
     const date = `${calMonth}-${pad(d)}`, ws = byDate.get(date) || [];
     cells.push(h('button', { class: 'cal-cell' + (ws.length ? ' done' : '') + (date === today ? ' today' : ''), onclick: () => { if (ws.length) location.hash = '#/w/' + ws[0].id; else newWorkoutDialog(date); } },
-      h('span', { class: 'cd' }, d), ws.length ? h('span', { class: 'dl' }, ws.map((w) => w.day || '●').join(' ')) : null));
+      h('span', { class: 'cd' }, d), ws.length ? h('span', { class: 'dl' }, ws.map(dayBadge).join(' ')) : null));
   }
   const monthDays = [...byDate.keys()].filter((d) => d.startsWith(calMonth)).length;
   put(root, h('div', { class: 'row between' }, h('h1', {}, 'Журнал'), h('button', { class: 'btn primary', onclick: () => newWorkoutDialog() }, '＋ Тренировка')),
@@ -106,7 +113,7 @@ export function journalView() {
     put(root, h('a', { class: 'card wk-item', href: '#/w/' + w.id },
       h('div', { class: 'wk-date' }, h('b', {}, parseISO(w.date).getDate()), h('small', {}, WD[weekdayIdx(w.date)])),
       h('div', { class: 'grow' },
-        h('div', {}, h('b', {}, `День ${w.day || '—'}`), ' ', h('small', { class: 'muted' }, w.cycle)),
+        h('div', {}, h('b', {}, wName(w)), ' ', h('small', { class: 'muted' }, w.cycle)),
         h('small', { class: 'muted' }, w.items.map((i) => i.exercise || i.title || 'Блок').slice(0, 4).join(' · ') + (w.items.length > 4 ? ` · +${w.items.length - 4}` : '')),
         w.items.length ? null : h('small', { class: 'muted' }, 'пусто'))));
   }
@@ -139,24 +146,26 @@ const now0 = new Date();
 const bodyPeriod = { year: 0, month: 0 };
 
 // ======================= аналитика =======================
-function exerciseList(onPick, limit = 200) {
+function exerciseList(onPick, limit = 200, opts = {}) {
   const db = state.db;
-  const input = h('input', { class: 'search', placeholder: 'Поиск упражнения: делала ли я это раньше?', autocomplete: 'off' });
+  const input = h('input', { class: 'search', placeholder: '🔍 Найти упражнение: делала ли я это раньше?', autocomplete: 'off' });
   const list = h('div', { class: 'pick-list' });
   const paint = () => {
     const q = nameKey(input.value);
+    if (opts.onQuery) opts.onQuery(q);
+    if (opts.top && !q) { list.replaceChildren(); return; } // наверху страницы список показываем только когда что-то введено
     const rows = db.exercises.filter((e) => !q || nameKey(e.name).includes(q) || (e.aliases || []).some((a) => nameKey(a).includes(q)))
       .map((e) => ({ e, hist: historyOf(db, e.name) }))
       .sort((a, b) => ((b.hist.at(-1) || { w: { date: '' } }).w.date).localeCompare((a.hist.at(-1) || { w: { date: '' } }).w.date)).slice(0, limit);
     list.replaceChildren(...(rows.length ? rows.map(({ e, hist }) => {
-      const last = hist.at(-1), pl = plateau(hist, exMeta(db, e.name));
+      const last = hist.at(-1), pl = plateau(hist, exMeta(db, e.name), ...plateauCfg(db));
       return h('button', { class: 'pick', onclick: () => onPick(e.name) },
         h('b', {}, e.fav ? '★ ' : '', e.name, pl ? h('span', { class: 'chip worse' }, 'плато') : null),
         h('small', {}, last ? `${hist.length} раз · последний ${fmtDate(last.w.date)}: ${setsLine(last.it.sets)}` : 'Пока не выполнялось'));
     }) : [h('div', { class: 'empty small' }, q ? `«${input.value}» ещё не встречалось — значит, делаешь впервые.` : 'Упражнений пока нет')]));
   };
   input.addEventListener('input', paint); paint();
-  return h('div', {}, input, list);
+  return opts.noInput ? list : h('div', {}, input, list);
 }
 
 function favCard(e) {
@@ -181,28 +190,32 @@ export function analyticsView(name) {
   const root = h('div', { class: 'page' });
   if (!name) {
     const favs = db.exercises.filter((e) => e.fav && historyOf(db, e.name).length >= 0);
-    const plateaus = db.exercises.map((e) => ({ e, hist: historyOf(db, e.name) })).map((x) => ({ ...x, pl: plateau(x.hist, exMeta(db, x.e.name)) })).filter((x) => x.pl)
+    const plateaus = db.exercises.map((e) => ({ e, hist: historyOf(db, e.name) })).map((x) => ({ ...x, pl: plateau(x.hist, exMeta(db, x.e.name), ...plateauCfg(db)) })).filter((x) => x.pl)
       .sort((a, b) => (a.pl.since < b.pl.since ? -1 : 1));
     const tab = analyticsView.tab || (favs.length ? 'fav' : 'all');
     const pill = (k, label) => h('button', { class: 'pill' + (tab === k ? ' on' : ''), onclick: () => { analyticsView.tab = k; refresh(); } }, label);
-    put(root, h('h1', {}, 'Аналитика'), h('div', { class: 'row wrap' }, pill('fav', `★ Избранное (${favs.length})`), pill('plateau', `Плато (${plateaus.length})`), pill('all', 'Все упражнения')));
+    const body = h('div', {});
+    put(root, h('h1', {}, 'Аналитика'),
+      exerciseList((n) => { location.hash = '#/analytics/' + encodeURIComponent(n); }, 200, { top: true, onQuery: (q) => { body.hidden = !!q; } }),
+      body);
+    put(body, h('div', { class: 'row wrap' }, pill('fav', `★ Избранное (${favs.length})`), pill('plateau', `Плато (${plateaus.length})`), pill('all', 'Все упражнения')));
     if (tab === 'fav') {
-      put(root, favs.length ? favs.map(favCard) : h('section', { class: 'card empty' }, 'Здесь будут упражнения, за которыми ты хочешь следить. Нажми ☆ рядом с названием — в тренировке или на странице упражнения.'));
+      put(body, favs.length ? favs.map(favCard) : h('section', { class: 'card empty' }, 'Здесь будут упражнения, за которыми ты хочешь следить. Нажми ☆ рядом с названием — в тренировке или на странице упражнения.'));
     } else if (tab === 'plateau') {
-      put(root, h('p', { class: 'muted small' }, 'Плато — когда в последних 4 выполнениях упражнения не вырос ни вес, ни объём (+3%). Это не ошибка: иногда так и задумано тренером.'),
+      put(body, h('p', { class: 'muted small' }, `Плато — когда в последних ${plateauCfg(db)[0]} выполнениях упражнения не вырос ни вес, ни общий объём (больше чем на ${plateauCfg(db)[1]}%). Это не ошибка: иногда так и задумано тренером. Менять правило можно в Настройках.`),
         plateaus.length ? plateaus.map(({ e, pl, hist }) => h('a', { class: 'card', href: '#/analytics/' + encodeURIComponent(e.name) },
           h('b', {}, e.name), h('div', { class: 'muted small' }, `Не растёт с ${fmtDate(pl.since)} — ${pl.sessions} занятия подряд${pl.weight ? `, рабочий вес ${fmtNum(pl.weight)} кг` : ''}. Всего выполнялось ${hist.length} раз.`)))
           : h('section', { class: 'card empty' }, '✓ Плато не найдено'));
     } else {
       const dups = similarExercises(db);
-      put(root, dups.length ? h('a', { class: 'card warn', href: '#/exercises' }, `Возможных дублей упражнений: ${dups.length}. Открыть и объединить →`) : null,
-        h('section', { class: 'card' }, exerciseList((n) => { location.hash = '#/analytics/' + encodeURIComponent(n); })));
+      put(body, dups.length ? h('a', { class: 'card warn', href: '#/exercises' }, `Возможных дублей упражнений: ${dups.length}. Открыть и объединить →`) : null,
+        h('section', { class: 'card' }, exerciseList((n) => { location.hash = '#/analytics/' + encodeURIComponent(n); }, 500, { noInput: true })));
     }
     return root;
   }
   const meta = exMeta(db, name), hist = historyOf(db, name);
   const stats = hist.map((e) => ({ e, s: setStats(e.it.sets, meta) }));
-  const pl = plateau(hist, meta);
+  const pl = plateau(hist, meta, ...plateauCfg(db));
   const hasWeight = stats.some((x) => x.s.maxW !== null);
   const unitWord = meta.unit === 'sec' ? 'секунд' : 'повторов';
   const last = stats.at(-1), prev = stats.at(-2);
@@ -251,7 +264,7 @@ export function analyticsView(name) {
       h('p', { class: 'muted small' }, volExplain(last, meta, hasWeight))),
     h('section', { class: 'card' }, h('h3', {}, 'История'),
       h('div', { class: 'hist' }, [...stats].reverse().map((x) => h('a', { class: 'hist-row', href: '#/w/' + x.e.w.id },
-        h('b', {}, fmtDate(x.e.w.date)), h('span', { class: 'muted' }, `День ${x.e.w.day || '—'}`),
+        h('b', {}, fmtDate(x.e.w.date)), h('span', { class: 'muted' }, wName(x.e.w)),
         h('span', { class: 'grow' }, setsLine(x.e.it.sets)), x.e.it.note ? h('small', { class: 'muted' }, x.e.it.note) : null)))));
   return root;
 }

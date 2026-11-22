@@ -1,5 +1,5 @@
 // Картинка тренировки для "Поделиться": рисуем таблицу на canvas и кладём PNG в буфер обмена.
-import { compareItem, exMeta, num } from './model.js';
+import { compareItem, exMeta, num, wName } from './model.js';
 import { state } from './store.js';
 import { fmtDate, fmtNum, toast, download, plural } from './util.js';
 
@@ -98,7 +98,7 @@ export function renderWorkoutCanvas(w, { withColors = true } = {}) {
 
   ctx.fillStyle = C.accent; ctx.fillRect(0, 0, W, 8);
   ctx.fillStyle = C.text; ctx.font = `700 46px ${FONT}`;
-  ctx.fillText(`День ${w.day || ''}`.trim(), pad, 76);
+  ctx.fillText(wName(w), pad, 76);
   ctx.fillStyle = C.muted; ctx.font = `28px ${FONT}`;
   ctx.fillText(fmtDate(w.date), pad, 114);
 

@@ -2,7 +2,7 @@
 // Звуки — через WebAudio (без файлов), экран не гаснет (Wake Lock, где поддерживается).
 import { h } from './util.js';
 
-function beep(freq = 880, ms = 140) {
+export function beep(freq = 880, ms = 140) {
   try {
     const ctx = beep.ctx || (beep.ctx = new (window.AudioContext || window.webkitAudioContext)());
     const o = ctx.createOscillator(), g = ctx.createGain();

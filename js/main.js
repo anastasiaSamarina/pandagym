@@ -4,7 +4,7 @@ import { state, load, subscribe, persistNow } from './store.js';
 import { startAutoSync, syncNow, isConfigured } from './sync.js';
 import { journalView, analyticsView, bodyView } from './view-main.js';
 import { workoutView, dropIfEmpty } from './view-workout.js';
-import { settingsView, exercisesView, checkView, applyTheme } from './view-settings.js';
+import { settingsView, exercisesView, checkView, syncLogView, applyTheme } from './view-settings.js';
 
 const routes = [
   [/^#\/?$/, journalView],
@@ -15,6 +15,7 @@ const routes = [
   [/^#\/settings$/, settingsView],
   [/^#\/exercises$/, exercisesView],
   [/^#\/check$/, checkView],
+  [/^#\/synclog$/, syncLogView],
 ];
 const NAV = [['#/', '📓', 'Журнал'], ['#/analytics', '📈', 'Аналитика'], ['#/body', '⚖️', 'Замеры'], ['#/settings', '⚙️', 'Настройки']];
 
@@ -33,11 +34,11 @@ function render() {
   try { view.replaceChildren(route[1](...args)); }
   catch (e) { console.error(e); view.replaceChildren(h('div', { class: 'page' }, h('h2', {}, 'Что-то пошло не так'), h('pre', { class: 'err' }, String(e.stack || e)), h('a', { class: 'btn', href: '#/' }, 'В журнал'))); }
   nav.querySelectorAll('a').forEach((a) => a.classList.toggle('on', hash === a.getAttribute('href') || (a.getAttribute('href') !== '#/' && hash.startsWith(a.getAttribute('href')))
-    || (a.getAttribute('href') === '#/' && (hash === '#/' || hash.startsWith('#/w/'))) || (a.getAttribute('href') === '#/settings' && /#\/(exercises|check)/.test(hash))));
+    || (a.getAttribute('href') === '#/' && (hash === '#/' || hash.startsWith('#/w/'))) || (a.getAttribute('href') === '#/settings' && /#\/(exercises|check|synclog)/.test(hash))));
 }
 
 // ---------- статус синхронизации ----------
-const badge = h('button', { class: 'sync-badge', onclick: () => { if (isConfigured()) syncNow().then(() => toast('Синхронизировано')).catch((e) => toast(e.message, 5000)); else location.hash = '#/settings'; } });
+const badge = h('button', { class: 'sync-badge', onclick: () => { if (!isConfigured()) { location.hash = '#/settings'; return; } if (state.sync.state === 'error') { toast(state.sync.msg || 'Ошибка синхронизации', 6000, { label: 'Журнал', fn: () => { location.hash = '#/synclog'; } }); return; } syncNow().then(() => toast('Синхронизировано')).catch((e) => toast(e.message, 6000, { label: 'Журнал', fn: () => { location.hash = '#/synclog'; } })); } });
 function paintBadge() {
   const s = state.sync.state;
   const map = { off: ['', 'не подключена'], idle: ['ok', 'синхронизировано'], pending: ['wait', 'ждёт отправки'], syncing: ['wait', 'синхронизация…'], offline: ['off', 'нет связи'], error: ['err', 'ошибка'] };

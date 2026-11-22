@@ -7,7 +7,7 @@ import { debounce, nowISO } from './util.js';
 export const state = {
   db: emptyDb(),
   // настройки ЭТОГО устройства (не попадают в Excel): доступ к GitHub, тема
-  device: { gh: { owner: '', repo: '', branch: 'main', path: 'data/workouts.xlsx' }, token: '', sha: '', syncedRev: -1, lastSync: '', theme: 'auto' },
+  device: { gh: { owner: '', repo: '', branch: 'main', path: 'data/gym.json' }, token: '', sha: '', syncedRev: -1, lastSync: '', theme: 'auto' },
   sync: { state: 'off', msg: '' }, // off | idle | pending | syncing | offline | error
 };
 export const hooks = { requestSync: () => {} }; // подставляется из sync.js
@@ -38,6 +38,7 @@ async function idbOp(store, mode, fn) {
   });
 }
 
+export function normalizeDb(d) { return normalize(d); }
 function normalize(d) {
   const base = emptyDb();
   const db = { ...base, ...d, settings: { ...base.settings, ...(d.settings || {}) } };
