@@ -18,12 +18,19 @@ import { weekStart, parseISO, isoDate, addDays, isISO } from './util.js';
 
 export const emptyDb = () => ({
   v: 1, rev: 0,
-  settings: { perWeek: 3, currentCycle: 'Цикл 1', cycles: ['Цикл 1'] },
+  settings: { perWeek: 3, currentCycle: 'Цикл 1', cycles: ['Цикл 1'], restSec: 60, plateauN: 4, plateauPct: 3, notDup: [] },
   exercises: [], workouts: [], measures: [], deleted: [],
   importLog: [], // что нашёл/исправил импорт старой таблицы (хранится только на устройстве, см. «Проверка данных»)
 });
 
 export const DAY_LABELS = ['А', 'Б', 'С'];
+/** Название тренировки: старые «А/Б/С» показываем как «День А», любое своё название — как есть */
+export const wName = (w) => { const d = String(w.day || '').trim(); return !d ? 'Тренировка' : d.length <= 2 ? `День ${d}` : d; };
+/** Короткая метка для клетки календаря */
+export const dayBadge = (w) => { const d = String(w.day || '').trim(); if (!d) return '●'; if (d.length <= 2) return d; const m = /^День\s+(\S{1,2})$/i.exec(d); return m ? m[1] : d[0].toUpperCase(); };
+/** Что вводится в упражнении: вес / повторы / темп. Для старых записей выводим из режима. */
+export const fieldsOf = (it) => (it.fields ? { w: !!it.fields.w, r: it.fields.r !== false, t: !!it.fields.t } : { w: it.mode !== 'bodyweight', r: true, t: !!(it.tempo && it.tempo.some((x) => x !== null && x !== '')) });
+export const tempoText = (it) => (it.tempo && it.tempo.some((x) => x !== null && x !== '') ? it.tempo.map((x) => (x === null || x === '' ? 0 : x)).join('-') : '');
 export const MUSCLES = ['Ягодицы', 'Квадрицепс', 'Задняя поверхность бедра', 'Спина', 'Грудь', 'Плечи', 'Бицепс', 'Трицепс', 'Пресс / кор', 'Поясница', 'Икры', 'Другое'];
 
 // ---------- числа и названия ----------
@@ -167,7 +174,8 @@ export function compareItem(db, w, it) {
 }
 
 /** Плато: в последних N выполнениях ни разу не побили лучшее из первого (вес лучше или объём +3%) */
-export function plateau(hist, meta, N = 4) {
+export const plateauCfg = (db) => [Math.max(2, Number(db.settings.plateauN) || 4), Number(db.settings.plateauPct ?? 3)];
+export function plateau(hist, meta, N = 4, pct = 3) {
   if (hist.length < N) return null;
   const last = hist.slice(-N);
   const st = last.map((e) => setStats(e.it.sets, meta));
@@ -175,7 +183,7 @@ export function plateau(hist, meta, N = 4) {
   for (const s of st.slice(1)) {
     const w = meta.assist ? s.minW : s.maxW;
     const wBetter = w !== null && bestW !== null && (meta.assist ? w < bestW : w > bestW);
-    if (wBetter || s.vol > bestVol * 1.03) return null;
+    if (wBetter || s.vol > bestVol * (1 + pct / 100)) return null;
   }
   return { since: last[0].w.date, sessions: N, weight: bestW };
 }
@@ -204,12 +212,12 @@ export function validate(db, today) {
   const seen = new Map();
   for (const w of db.workouts) {
     const link = '#/w/' + w.id;
-    const title = `${w.cycle} · День ${w.day || '?'} · ${w.date || 'без даты'}`;
+    const title = `${w.cycle} · ${wName(w)} · ${w.date || 'без даты'}`;
     if (!isISO(w.date)) { add('error', `${title}: дата не распознана`, link); continue; }
     if (w.date > addDays(today, 7)) add('warn', `${title}: дата в будущем`, link);
     if (w.date < '2015-01-01') add('warn', `${title}: очень старая дата`, link);
     const k = w.date + '|' + w.day;
-    if (seen.has(k)) add('warn', `${title}: две тренировки «День ${w.day}» в один день — возможно, ошибка в дате`, link);
+    if (seen.has(k)) add('warn', `${title}: две тренировки «${wName(w)}» в один день — возможно, ошибка в дате`, link);
     seen.set(k, w.id);
     if (!w.items.length && !w.plan && !w.note) add('info', `${title}: пустая тренировка`, link);
     for (const it of w.items) {
@@ -248,14 +256,16 @@ export function similarTo(db, name, limit = 4) {
     .filter((x, _, arr) => x.n === arr[0].n) // только самые близкие: общее слово вроде «подтягивания» само по себе не повод
     .slice(0, limit).map((x) => x.e);
 }
+export const dupKey = (a, b) => [nameKey(a), nameKey(b)].sort().join('|');
 export function similarExercises(db) {
+  const skip = new Set((db.settings && db.settings.notDup) || []);
   const names = db.exercises.map((e) => e.name);
   const out = [];
   for (let i = 0; i < names.length; i++) for (let j = i + 1; j < names.length; j++) {
     const a = tokens(names[i]), b = tokens(names[j]);
     if (!a.size || !b.size) continue;
     const inter = [...a].filter((x) => b.has(x)).length;
-    if (inter / (a.size + b.size - inter) >= 0.6) out.push([names[i], names[j]]);
+    if (inter / (a.size + b.size - inter) >= 0.6 && !skip.has(dupKey(names[i], names[j]))) out.push([names[i], names[j]]);
   }
   return out;
 }
@@ -280,8 +290,14 @@ export function mergeDb(local, remote) {
   out.measures = [...mm.values()].sort((a, b) => (a.date < b.date ? -1 : 1));
   const em = new Map();
   for (const e of [...remote.exercises, ...local.exercises]) em.set(e.name, e);
-  out.exercises = [...em.values()];
-  out.settings = { ...remote.settings, ...local.settings, cycles: [...new Set([...(remote.settings.cycles || []), ...(local.settings.cycles || [])])] };
+  // упражнение, которое уже объединили с другим (его название лежит в синонимах другого) и которое нигде не используется,
+  // не должно «воскресать» с другого устройства — иначе дубли возвращаются после каждой синхронизации
+  const used = new Set(out.workouts.flatMap((w) => w.items.map((it) => it.exercise).filter(Boolean)));
+  const merged = [...em.values()];
+  const aliasKeys = new Set(merged.flatMap((e) => (e.aliases || []).map(nameKey)));
+  out.exercises = merged.filter((e) => used.has(e.name) || !aliasKeys.has(nameKey(e.name)));
+  out.settings = { ...remote.settings, ...local.settings, cycles: [...new Set([...(remote.settings.cycles || []), ...(local.settings.cycles || [])])],
+    notDup: [...new Set([...((remote.settings || {}).notDup || []), ...((local.settings || {}).notDup || [])])] };
   out.importLog = local.importLog || [];
   out.rev = Math.max(local.rev || 0, remote.rev || 0) + 1;
   return out;

@@ -1,9 +1,10 @@
 // Настройки, импорт/экспорт Excel, справочник упражнений, проверка данных.
 import { h, put, refresh, toast, modal, confirmBox, fmtDate, download, todayISO, nowISO } from './util.js';
 import { state, replaceDb, markChanged, saveDevice, notify } from './store.js';
-import { mergeDb, mergeExercise, similarExercises, validate, historyOf, exMeta, nameKey, normName } from './model.js';
+import { mergeDb, mergeExercise, similarExercises, validate, historyOf, exMeta, nameKey, normName, dupKey } from './model.js';
 import { dbToXlsx, readAnyWorkbook, applyLegacy } from './excel-io.js';
-import { syncNow, testConnection, isConfigured } from './sync.js';
+import { syncNow, testConnection, isConfigured, getSyncLog, clearSyncLog } from './sync.js';
+import { soundOn, setSound, beep } from './rest.js';
 
 // ======================= импорт =======================
 export function importDialog() {
@@ -73,6 +74,14 @@ export function settingsView() {
         h('button', { class: 'btn', onclick: () => cycleDialog('new') }, '＋ Новый цикл'),
         h('button', { class: 'btn', onclick: () => cycleDialog('rename') }, '✎ Переименовать текущий')),
       h('small', { class: 'muted' }, 'Каждый цикл — отдельный лист в Excel-файле.')),
+    h('section', { class: 'card' }, h('h3', {}, 'Отдых и плато'),
+      field('Отдых между подходами, секунд', h('input', { class: 'num', type: 'number', min: 10, max: 600, step: 5, value: db.settings.restSec || 60, onchange: (e) => { db.settings.restSec = Math.max(10, Number(e.target.value) || 60); markChanged(); } })),
+      h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: soundOn(), onchange: (e) => { setSound(e.target.checked); if (e.target.checked) beep(880, 120); } }), 'Звук по окончании отдыха (на этом устройстве)'),
+      h('small', { class: 'muted' }, 'Звук работает, пока приложение открыто и экран не заблокирован. Если звука нет, проверь, что в браузере для этого сайта он не отключён, и громкость мультимедиа на телефоне.'),
+      h('h4', {}, 'Что считать плато'),
+      field('Сколько последних занятий смотреть', h('input', { class: 'num', type: 'number', min: 2, max: 12, value: db.settings.plateauN || 4, onchange: (e) => { db.settings.plateauN = Math.min(12, Math.max(2, Number(e.target.value) || 4)); markChanged(); } })),
+      field('Рост объёма, который считается прогрессом, %', h('input', { class: 'num', type: 'number', min: 0, max: 50, step: 0.5, value: db.settings.plateauPct ?? 3, onchange: (e) => { db.settings.plateauPct = Math.max(0, Number(e.target.value) || 0); markChanged(); } })),
+      h('small', { class: 'muted' }, 'Плато — когда за последние N занятий ни разу не вырос рабочий вес и общий объём (вес × повторы) не вырос больше чем на указанный процент по сравнению с самым первым из этих занятий.')),
     h('section', { class: 'card' }, h('h3', {}, 'Данные'),
       h('div', { class: 'col' },
         h('button', { class: 'btn', onclick: importDialog }, '📂 Загрузить Excel (старая таблица или файл приложения)'),
@@ -83,11 +92,12 @@ export function settingsView() {
     h('section', { class: 'card' }, h('h3', {}, 'Синхронизация с GitHub'),
       h('p', { class: 'muted' }, 'Нужна, чтобы телефон и компьютер видели одни данные. Без неё приложение работает, данные лежат только в этом браузере. Пошаговая инструкция: docs/SYNC_SETUP.md.'),
       field('Владелец (логин GitHub)', ghIn('owner', 'my-login')), field('Репозиторий с данными', ghIn('repo', 'gym-data')),
-      field('Ветка', ghIn('branch', 'main')), field('Путь к файлу', ghIn('path', 'data/workouts.xlsx')), field('Токен доступа (хранится только на этом устройстве)', token),
+      field('Ветка', ghIn('branch', 'main')), field('Путь к файлу (.json — быстро и надёжно, .xlsx — таблица)', ghIn('path', 'data/gym.json')), field('Токен доступа (хранится только на этом устройстве)', token),
       h('div', { class: 'row wrap' },
         h('button', { class: 'btn', onclick: async () => { try { const r = await testConnection(); toast(r.canPush ? `Подключение работает${r.private ? ' (репозиторий приватный ✓)' : ' — внимание: репозиторий ПУБЛИЧНЫЙ'}` : 'Репозиторий виден, но записывать токен не может', 5000); } catch (e) { toast(e.message, 6000); } } }, 'Проверить подключение'),
         h('button', { class: 'btn primary', onclick: async () => { try { await syncNow(); toast('Синхронизировано'); refresh(); } catch (e) { toast(e.message, 6000); } } }, 'Синхронизировать сейчас'),
-        h('button', { class: 'btn', onclick: () => { dev.token = ''; saveDevice(); toast('Токен удалён с этого устройства'); refresh(); } }, 'Забыть токен')),
+        h('button', { class: 'btn', onclick: () => { dev.token = ''; saveDevice(); toast('Токен удалён с этого устройства'); refresh(); } }, 'Забыть токен'),
+        h('a', { class: 'btn', href: '#/synclog' }, '🧾 Журнал синхронизации')),
       status),
     h('section', { class: 'card' }, h('h3', {}, 'Вид'),
       field('Тема', h('select', { class: 'sel', value: dev.theme, onchange: (e) => { dev.theme = e.target.value; saveDevice(); applyTheme(); } },
@@ -130,22 +140,40 @@ export function exercisesView() {
   put(root, h('a', { class: 'back', href: '#/settings' }, '← Настройки'), h('h1', {}, 'Упражнения'),
     h('p', { class: 'muted' }, 'Справочник упражнений. Здесь можно: переименовать упражнение или объединить два названия в одно — новое название сразу подставится во всех тренировках; указать, что упражнение считается в секундах; отметить «облегчение» (гравитрон: меньше вес = лучше, поэтому цвета сравнения инвертируются).'),
     sim.length ? h('section', { class: 'card warn' }, h('b', {}, 'Возможные дубли'),
-      sim.map(([a, b]) => h('div', { class: 'row between' }, h('span', {}, `«${a}» ≈ «${b}»`), h('button', { class: 'btn small', onclick: () => mergeDialog(a, b) }, 'Объединить')))) : null);
+      sim.map(([a, b]) => h('div', { class: 'dup-row' }, h('span', {}, `«${a}» ≈ «${b}»`), h('span', { class: 'row' }, h('button', { class: 'btn small', onclick: () => mergeDialog(a, b) }, 'Объединить'),
+        h('button', { class: 'btn small', onclick: () => { (db.settings.notDup ||= []).push(dupKey(a, b)); markChanged(); toast('Хорошо, больше не буду предлагать'); refresh(); } }, 'Это не дубль'))))) : null);
+  const q = h('input', { class: 'search', placeholder: '🔍 Найти упражнение', autocomplete: 'off' });
+  put(root, q);
   const names = [...db.exercises].sort((a, b) => used(b.name) - used(a.name) || a.name.localeCompare(b.name, 'ru'));
-  put(root, h('div', { class: 'ex-table' }, names.map((e) => h('section', { class: 'card ex-row' },
+  const table = h('div', { class: 'ex-table' }, names.map((e) => h('section', { class: 'card ex-row', 'data-n': nameKey(e.name) + ' ' + (e.aliases || []).map(nameKey).join(' ') },
     h('div', { class: 'row between' }, h('b', {}, e.name), h('small', { class: 'muted' }, `${used(e.name)} раз`)),
     h('div', { class: 'row wrap' },
       h('select', { class: 'sel', value: e.unit, onchange: (ev) => { e.unit = ev.target.value; markChanged(); } }, h('option', { value: 'reps' }, 'повторы'), h('option', { value: 'sec' }, 'секунды')),
       h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: !!e.assist, onchange: (ev) => { e.assist = ev.target.checked; markChanged(); } }), 'облегчение (меньше = лучше)')),
     h('div', { class: 'row' }, h('button', { class: 'btn small', onclick: () => mergeDialog(e.name) }, '✎ Переименовать / объединить'),
-      used(e.name) ? null : h('button', { class: 'btn small danger', onclick: () => { db.exercises = db.exercises.filter((x) => x !== e); markChanged(); refresh(); } }, 'Удалить'))))));
+      used(e.name) ? null : h('button', { class: 'btn small danger', onclick: () => { db.exercises = db.exercises.filter((x) => x !== e); markChanged(); refresh(); } }, 'Удалить')))));
+  put(root, table);
+  q.addEventListener('input', () => { const k = nameKey(q.value); table.querySelectorAll('.ex-row').forEach((el) => { el.hidden = !!k && !el.dataset.n.includes(k); }); });
   return root;
 }
 export function mergeDialog(from, to = '', onDone = null) {
   const db = state.db;
-  const input = h('input', { class: 'txt', value: to || from, list: 'ex-names' });
-  modal((close) => h('div', {}, h('h3', {}, 'Переименовать / объединить'), h('p', { class: 'muted' }, `«${from}» → название, которое останется. Если выбрать уже существующее упражнение, все записи объединятся и история станет общей.`),
-    input, h('datalist', { id: 'ex-names' }, db.exercises.map((e) => h('option', { value: e.name }))),
+  const input = h('input', { class: 'txt', value: to || from, autocomplete: 'off' });
+  const list = h('div', { class: 'pick-list compact' });
+  const hint = h('div', { class: 'muted small' });
+  const used = (n) => historyOf(db, n).length;
+  const paint = () => {
+    const q = nameKey(input.value), target = normName(input.value);
+    const matches = db.exercises.filter((e) => e.name !== from && (!q || nameKey(e.name).includes(q))).sort((a, b) => used(b.name) - used(a.name)).slice(0, 8);
+    list.replaceChildren(...matches.map((e) => h('button', { class: 'pick', onclick: () => { input.value = e.name; paint(); } },
+      h('b', {}, e.name), h('small', {}, `${used(e.name)} раз — нажми, чтобы объединить с ним`))));
+    const exists = db.exercises.find((e) => e.name !== from && nameKey(e.name) === nameKey(target));
+    hint.textContent = !target || target === from ? 'Введи новое название или выбери существующее упражнение из списка.'
+      : exists ? `Будет объединено с «${exists.name}»: все записи «${from}» станут «${exists.name}», история общая.` : `Будет просто переименовано: «${from}» → «${target}» во всех тренировках.`;
+  };
+  input.addEventListener('input', paint);
+  modal((close) => h('div', {}, h('h3', {}, 'Переименовать / объединить'), h('p', { class: 'muted' }, `Упражнение «${from}»`),
+    input, hint, list,
     h('div', { class: 'row end' }, h('button', { class: 'btn', onclick: close }, 'Отмена'), h('button', { class: 'btn primary', onclick: () => {
       const target = normName(input.value); if (!target || target === from) { close(); return; }
       const exists = db.exercises.find((e) => nameKey(e.name) === nameKey(target));
@@ -154,6 +182,7 @@ export function mergeDialog(from, to = '', onDone = null) {
       markChanged(); close(); toast('Готово — название обновлено во всех тренировках');
       if (onDone) onDone(exists ? exists.name : target); else refresh();
     } }, 'Применить'))));
+  paint(); setTimeout(() => { input.focus(); input.select(); }, 50);
 }
 
 // ======================= проверка данных =======================
@@ -175,4 +204,20 @@ export function checkView() {
     logSection,
     h('p', { class: 'muted' }, 'Ниже — автоматическая проверка: даты, которые не читаются, две одинаковые тренировки в один день, пустые тренировки, подозрительные веса, похожие названия упражнений.'),
     items.length ? h('section', { class: 'card' }, items.map((i) => h('a', { class: 'check-row', href: i.link || '#/check' }, h('span', {}, icon[i.level]), h('span', {}, i.text)))) : h('section', { class: 'card empty' }, '✓ Проблем не найдено'));
+}
+
+// ======================= журнал синхронизации =======================
+export function syncLogView() {
+  const log = getSyncLog().slice().reverse();
+  const icon = { info: '·', ok: '✓', warn: '⚠', error: '⛔' };
+  const text = () => getSyncLog().map((x) => `${x.t} [${x.level}] ${x.msg}`).join('\n');
+  const root = h('div', { class: 'page' }, h('a', { class: 'back', href: '#/settings' }, '← Настройки'), h('h1', {}, 'Журнал синхронизации'),
+    h('p', { class: 'muted' }, `Здесь записано, что приложение делало при каждой синхронизации и что ответил GitHub. Хранится только на этом устройстве, токен в журнал не попадает. Если что-то не работает — нажми «Скопировать» и пришли текст.`),
+    h('div', { class: 'row wrap' },
+      h('button', { class: 'btn primary', onclick: async () => { try { await syncNow(); toast('Синхронизировано'); } catch (e) { toast(e.message, 6000); } refresh(); } }, 'Синхронизировать сейчас'),
+      h('button', { class: 'btn', onclick: async () => { try { await navigator.clipboard.writeText(text()); toast('Журнал скопирован'); } catch { toast('Не удалось скопировать'); } } }, 'Скопировать'),
+      h('button', { class: 'btn', onclick: () => { clearSyncLog(); refresh(); } }, 'Очистить')),
+    log.length ? h('section', { class: 'card log' }, log.map((x) => h('div', { class: 'log-row ' + x.level }, h('span', {}, icon[x.level] || '·'),
+      h('small', { class: 'muted' }, new Date(x.t).toLocaleString('ru-RU')), h('span', {}, x.msg)))) : h('section', { class: 'card empty' }, 'Журнал пока пуст.'));
+  return root;
 }

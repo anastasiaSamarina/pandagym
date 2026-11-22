@@ -5,15 +5,15 @@
 // 2) parseLegacy — разовый импорт твоей старой таблицы (блоки "День А / Круг / Вес / Количество").
 
 import { readXlsx, writeXlsx, cellAddr } from './xlsx-lite.js';
-import { emptyDb, ensureExercise, findExercise, normName, num, guessMeta, nameKey, latestCycle } from './model.js';
+import { fieldsOf, tempoText, emptyDb, ensureExercise, findExercise, normName, num, guessMeta, nameKey, latestCycle } from './model.js';
 import { isISO, nowISO, uid } from './util.js';
 
 const TYPE_TO_XLS = { sets: 'круги', free: 'свободный', interval: 'интервал' };
 const XLS_TO_TYPE = { 'круги': 'sets', 'свободный': 'free', 'интервал': 'interval' };
 
 export const COLS = ['ID', 'Дата', 'День', '№', 'Упражнение', 'Тип', 'Круг', 'Вес, кг', 'Повторы / сек',
-  'Комментарий круга', 'Комментарий упражнения', 'Работа, с', 'Отдых, с', 'Раундов', 'Формат', 'Движения', 'Медиа', 'Изменено'];
-const WIDTHS = [14, 12, 6, 5, 34, 11, 6, 9, 12, 28, 34, 10, 10, 9, 12, 30, 24, 22];
+  'Комментарий круга', 'Комментарий упражнения', 'Работа, с', 'Отдых, с', 'Раундов', 'Формат', 'Движения', 'Медиа', 'Изменено', 'Поля', 'Темп', 'Ссылки'];
+const WIDTHS = [14, 12, 6, 5, 34, 11, 6, 9, 12, 28, 34, 10, 10, 9, 12, 30, 24, 22, 16, 10, 30];
 const SERVICE = new Set(['_настройки', '_упражнения', '_удалённые', '_справка', 'замеры']);
 
 // ======================= ЗАПИСЬ (db → xlsx) =======================
@@ -33,12 +33,14 @@ export async function dbToXlsx(db) {
         const n = i + 1, media = (it.media || []).join(';');
         if (it.type === 'sets') {
           const sets = it.sets.length ? it.sets : [{}];
+          const F = fieldsOf(it);
           sets.forEach((s, j) => rows.push([...base(n, it.exercise, 'круги'), it.sets.length ? j + 1 : '', s.w ?? '', s.r ?? '',
-            s.note || '', j === 0 ? it.note || '' : '', '', '', '', '', '', j === 0 ? media : '', upd]));
+            s.note || '', j === 0 ? it.note || '' : '', '', '', '', '', '', j === 0 ? media : '', upd,
+            j === 0 ? [F.w ? 'вес' : '', F.r ? 'повторы' : '', F.t ? 'темп' : ''].filter(Boolean).join(', ') : '', j === 0 ? tempoText(it) : '', j === 0 ? (it.links || []).join(' ') : '']));
         } else if (it.type === 'free') {
-          rows.push([...base(n, it.title || '', 'свободный'), '', '', '', '', it.text || '', '', '', '', '', media, upd]);
+          rows.push([...base(n, it.title || '', 'свободный'), '', '', '', '', it.text || '', '', '', '', '', '', media, upd, '', '', (it.links || []).join(' ')]);
         } else if (it.type === 'interval') {
-          rows.push([...base(n, it.title || '', 'интервал'), '', '', '', it.result || '', it.text || '', it.work ?? '', it.rest ?? '', it.rounds ?? '', it.format || '', it.moves || '', media, upd]);
+          rows.push([...base(n, it.title || '', 'интервал'), '', '', '', it.result || '', it.text || '', it.work ?? '', it.rest ?? '', it.rounds ?? '', it.format || '', it.moves || '', media, upd, '', '', (it.links || []).join(' ')]);
         }
       });
     }
@@ -115,6 +117,9 @@ export function parseAppFormat(wb) {
         w._items.set(n, it); w.items.push(it); it._n = n;
       }
       if (mediaRaw) it.media = String(mediaRaw).split(';').map((s) => s.trim()).filter(Boolean);
+      const linksRaw = val(r, 'Ссылки'); if (linksRaw) it.links = String(linksRaw).split(/\s+/).filter((u) => /^https?:\/\//i.test(u));
+      const fieldsRaw = val(r, 'Поля'); if (fieldsRaw && it.type === 'sets') { const f = String(fieldsRaw).toLowerCase(); it.fields = { w: f.includes('вес'), r: f.includes('повтор'), t: f.includes('темп') }; if (!it.fields.w && !it.fields.r) it.fields.r = true; }
+      const tempoRaw = val(r, 'Темп'); if (tempoRaw && it.type === 'sets') { const t = String(tempoRaw).split('-').map((q) => (q.trim() === '' ? null : num(q))); while (t.length < 4) t.push(null); it.tempo = t.slice(0, 4); }
       if (it.type === 'sets') {
         if (comment) it.note = String(comment);
         const round = val(r, 'Круг');
@@ -122,6 +127,7 @@ export function parseAppFormat(wb) {
         if (round !== null && round !== '' || wv !== null || rv !== null || sn) {
           it.sets.push({ w: wv === '' ? null : wv, r: rv === '' ? null : rv, note: sn ? String(sn) : '', _k: Number(round) || it.sets.length + 1 });
           if (wv !== null && num(wv) > 0) it.mode = 'weighted';
+          if (it.fields) it.mode = it.fields.w ? 'weighted' : 'bodyweight';
         }
       } else if (it.type === 'free') { if (comment) it.text = String(comment); }
       else {

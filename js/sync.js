@@ -3,10 +3,18 @@
 // данными (mergeDb) → если есть что отправить, коммитим обновлённый xlsx обратно.
 // Токен хранится только в этом браузере (localStorage) и никогда не попадает в Excel и в код.
 
-import { state, hooks, notify, persistNow, saveDevice, getMedia, putMedia, pendingMedia, markUploaded } from './store.js';
+import { state, hooks, notify, persistNow, saveDevice, getMedia, putMedia, pendingMedia, markUploaded, normalizeDb } from './store.js';
 import { dbToXlsx, parseAppFormat, readXlsx } from './excel-io.js';
 import { mergeDb } from './model.js';
 import { debounce, nowISO } from './util.js';
+
+// ---------- журнал синхронизации (хранится только на этом устройстве) ----------
+const LOG_KEY = 'gym.synclog';
+export function getSyncLog() { try { return JSON.parse(localStorage.getItem(LOG_KEY) || '[]'); } catch { return []; } }
+export function clearSyncLog() { try { localStorage.removeItem(LOG_KEY); } catch { /* ignore */ } }
+export function logSync(level, msg) {
+  try { const l = getSyncLog(); l.push({ t: nowISO(), level, msg: String(msg).slice(0, 400) }); localStorage.setItem(LOG_KEY, JSON.stringify(l.slice(-120))); } catch { /* ignore */ }
+}
 
 const API = 'https://api.github.com';
 export const isConfigured = () => !!(state.device.token && state.device.gh.owner && state.device.gh.repo);
@@ -29,10 +37,12 @@ class SyncError extends Error { constructor(msg, status) { super(msg); this.stat
 async function api(path, init = {}) {
   let r;
   try {
-    r = await fetch(API + path, { ...init, headers: { Authorization: 'Bearer ' + state.device.token, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', ...(init.headers || {}) } });
-  } catch { throw new SyncError('Нет связи с GitHub', 0); }
+    r = await fetch(API + path, { ...init, cache: 'no-store', headers: { Authorization: 'Bearer ' + state.device.token, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', ...(init.headers || {}) } });
+  } catch (e) { logSync('error', `${init.method || 'GET'} ${path}: нет связи (${e && e.message})`); throw new SyncError('Нет связи с GitHub', 0); }
   return r;
 }
+/** Что именно ответил GitHub (его текст ошибки сильно помогает искать причину) */
+async function why(r) { try { const j = await r.clone().json(); return j.message || ''; } catch { return ''; } }
 function explain(r) {
   if (r.status === 401) return 'GitHub не принял токен (неверный или истёк). Создай новый токен в Настройках.';
   if (r.status === 403) return 'Нет прав: у токена должно быть право Contents → Read and write на репозиторий с данными.';
@@ -45,8 +55,9 @@ const ref = () => `?ref=${encodeURIComponent(gh().branch || 'main')}`;
 
 async function getFile(path) {
   const r = await api(fileUrl(path) + ref());
+  logSync('info', `GET ${path} → ${r.status}`);
   if (r.status === 404) return null;
-  if (!r.ok) throw new SyncError(explain(r), r.status);
+  if (!r.ok) throw new SyncError(`${explain(r)} (${await why(r)})`, r.status);
   const j = await r.json();
   let bytes;
   if (j.content) bytes = fromB64(j.content);
@@ -62,8 +73,11 @@ async function putFile(path, bytes, sha, message) {
   const body = { message, content: toB64(bytes), branch: gh().branch || 'main' };
   if (sha) body.sha = sha;
   const r = await api(fileUrl(path), { method: 'PUT', body: JSON.stringify(body) });
-  if (r.status === 409 || r.status === 422) throw new SyncError('conflict', r.status);
-  if (!r.ok) throw new SyncError(explain(r), r.status);
+  const msg = r.ok ? '' : await why(r);
+  logSync(r.ok ? 'info' : 'warn', `PUT ${path} (sha ${sha ? sha.slice(0, 7) : 'нет'}) → ${r.status} ${msg}`);
+  // 409 — файл успели изменить; 422 с упоминанием sha — мы не знали, что файл уже есть. Оба случая лечатся повторным чтением.
+  if (r.status === 409 || (r.status === 422 && /sha/i.test(msg))) throw new SyncError('conflict', r.status);
+  if (!r.ok) throw new SyncError(`${explain(r)} (${msg})`, r.status);
   return (await r.json()).content.sha;
 }
 
@@ -73,6 +87,17 @@ export async function testConnection() {
   if (!r.ok) throw new SyncError(explain(r), r.status);
   const j = await r.json();
   return { private: j.private, canPush: !!(j.permissions && j.permissions.push) };
+}
+
+// Формат файла выбирается по расширению: .json — всё содержимое приложения (рекомендуется), .xlsx — таблица Excel
+const isJson = () => /\.json$/i.test(gh().path || '');
+async function decodeRemote(bytes) {
+  if (isJson()) return { db: normalizeDb(JSON.parse(new TextDecoder().decode(bytes))) };
+  return parseAppFormat(await readXlsx(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)));
+}
+async function encodeLocal() {
+  if (isJson()) return new TextEncoder().encode(JSON.stringify({ ...state.db, importLog: [] }));
+  return new Uint8Array(await (await dbToXlsx(state.db)).arrayBuffer());
 }
 
 let running = null, again = false;
@@ -87,11 +112,14 @@ async function doSync() {
   if (!navigator.onLine) { setSync(state.db.rev !== state.device.syncedRev ? 'pending' : 'offline', 'Нет связи'); throw new SyncError('Нет связи', 0); }
   setSync('syncing');
   try {
-    for (let attempt = 0; attempt < 3; attempt++) {
+    logSync('info', `Синхронизация: ${isJson() ? 'JSON' : 'Excel'}, локально тренировок ${state.db.workouts.length}`);
+    for (let attempt = 0; attempt < 5; attempt++) {
+      if (attempt) await new Promise((r) => setTimeout(r, 700 * attempt));
       const remote = await getFile(gh().path);
       let changedFromRemote = false;
       if (remote) {
-        const parsed = parseAppFormat(await readXlsx(remote.bytes.buffer.slice(remote.bytes.byteOffset, remote.bytes.byteOffset + remote.bytes.byteLength)));
+        let parsed = null;
+        try { parsed = await decodeRemote(remote.bytes); } catch (e) { logSync('error', `Файл в репозитории не читается: ${e.message}`); throw new SyncError('Файл в репозитории не читается — это точно файл приложения? Проверь путь в настройках.', 0); }
         if (parsed) {
           const before = JSON.stringify([state.db.workouts, state.db.measures, state.db.exercises]);
           const merged = mergeDb(state.db, parsed.db);
@@ -102,21 +130,23 @@ async function doSync() {
       const dirty = state.db.rev !== state.device.syncedRev;
       if (!remote || dirty) {
         const revAtStart = state.db.rev;
-        const bytes = new Uint8Array(await (await dbToXlsx(state.db)).arrayBuffer());
+        const bytes = await encodeLocal();
         try {
           state.device.sha = await putFile(gh().path, bytes, remote && remote.sha, `Тренировки: синхронизация ${nowISO().slice(0, 16).replace('T', ' ')}`);
-        } catch (e) { if (e.message === 'conflict') continue; throw e; } // кто-то успел записать — читаем заново и сливаем
+        } catch (e) { if (e.message === 'conflict') { logSync('warn', `Конфликт, попытка ${attempt + 1} из 5`); continue; } throw e; } // файл изменился, пока мы работали — читаем заново и сливаем
         state.device.syncedRev = revAtStart;
       } else { state.device.sha = remote.sha; state.device.syncedRev = state.db.rev; }
       await uploadMedia();
       state.device.lastSync = nowISO();
       saveDevice(); await persistNow();
       setSync('idle');
+      logSync('ok', 'Готово' + (changedFromRemote ? ' (подтянуты изменения с другого устройства)' : ''));
       if (changedFromRemote) notify('data');
       return;
     }
-    throw new SyncError('Не удалось слить изменения (слишком много конфликтов). Попробуй ещё раз.', 409);
+    throw new SyncError('Не удалось отправить изменения: файл в репозитории постоянно меняется. Подробности — в журнале синхронизации.', 409);
   } catch (e) {
+    logSync('error', e.message);
     setSync(e.status === 0 ? 'offline' : 'error', e.message);
     throw e;
   }
@@ -127,7 +157,7 @@ async function uploadMedia() {
     const m = await getMedia(id);
     if (!m) continue;
     try { await putFile('media/' + id, new Uint8Array(await m.blob.arrayBuffer()), null, `Медиа ${id}`); await markUploaded(id); }
-    catch (e) { if (e.message === 'conflict') await markUploaded(id); else throw e; } // файл уже есть
+    catch (e) { if (e.message === 'conflict') await markUploaded(id); else { logSync('error', `Медиа ${id}: ${e.message}`); throw e; } } // файл уже есть
   }
 }
 
