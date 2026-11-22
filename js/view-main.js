@@ -1,10 +1,11 @@
 // Основные экраны: журнал (с календарём), аналитика, замеры.
 import { h, put, refresh, toast, modal, fmtDate, fmtNum, fmtShort, parseInput, todayISO, isISO, addDays, weekStart, weekdayIdx, parseISO, daysBetween, WD, MONTHS_NOM, isoDate, pad } from './util.js';
 import { state, markChanged } from './store.js';
-import { filledSets, exMeta, ensureExercise, findExercise, historyOf, setStats, plateau, plateauCfg, weekCounts, weekStreak, workoutDates, setsLine, nameKey, num, similarExercises, wName, dayBadge } from './model.js';
+import { filledSets, exMeta, ensureExercise, findExercise, historyOf, setStats, plateau, plateauCfg, weekCounts, weekStreak, compareItem, COMPARE_MODES, workoutDates, setsLine, nameKey, num, similarExercises, wName, dayBadge } from './model.js';
 import { createWorkout } from './view-workout.js';
 import { lineChart, barChart, ring, sparkline, copyBtn } from './charts.js';
 import { importDialog, mergeDialog } from './view-settings.js';
+import { newPeriod, periodBar, periodRange, inPeriod, periodText } from './period.js';
 
 const byDateDesc = (a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : (b.created || '') < (a.created || '') ? -1 : 1);
 
@@ -127,23 +128,8 @@ const weekLabel = (k) => {
   const a = parseISO(k), b = parseISO(addDays(k, 6));
   return a.getMonth() === b.getMonth() ? `${a.getDate()}–${b.getDate()} ${MONTH_SHORT[a.getMonth()]}` : `${a.getDate()} ${MONTH_SHORT[a.getMonth()]}–${b.getDate()} ${MONTH_SHORT[b.getMonth()]}`;
 };
-/** p = { year, month }: month 0 — весь год, year 0 — все годы (если allowAll) */
-function periodBar(p, { allowAll = false } = {}) {
-  const db = state.db, ys = new Set([new Date().getFullYear()]);
-  for (const d of [...db.workouts.map((w) => w.date), ...db.measures.map((m) => m.date)]) if (isISO(d)) ys.add(Number(d.slice(0, 4)));
-  return h('div', { class: 'row wrap' },
-    h('select', { class: 'sel', value: String(p.year), onchange: (e) => { p.year = Number(e.target.value); refresh(); } },
-      allowAll ? h('option', { value: '0' }, 'Все годы') : null, [...ys].sort((a, b) => b - a).map((y) => h('option', { value: String(y) }, y))),
-    p.year ? h('select', { class: 'sel', value: String(p.month), onchange: (e) => { p.month = Number(e.target.value); refresh(); } },
-      h('option', { value: '0' }, 'Весь год'), MONTHS_NOM.map((n, i) => h('option', { value: String(i + 1) }, n))) : null);
-}
-function periodRange(p) {
-  if (!p.year) return ['0000-01-01', '9999-12-31'];
-  if (!p.month) return [`${p.year}-01-01`, `${p.year}-12-31`];
-  return [`${p.year}-${pad(p.month)}-01`, `${p.year}-${pad(p.month)}-${pad(new Date(p.year, p.month, 0).getDate())}`];
-}
-const now0 = new Date();
-const bodyPeriod = { year: 0, month: 0 };
+const bodyPeriod = newPeriod();
+const exPeriod = newPeriod();
 
 // ======================= аналитика =======================
 function exerciseList(onPick, limit = 200, opts = {}) {
@@ -185,6 +171,112 @@ function favCard(e) {
     sparkline(st.slice(-12).map((x) => (useW ? x.maxW ?? 0 : x.reps))));
 }
 
+// ---------- тепловая карта за год ----------
+let heatYear = new Date().getFullYear();
+function heatView() {
+  const db = state.db, y = heatYear, today = todayISO();
+  const cnt = new Map(), idOf = new Map();
+  for (const w of db.workouts) if (isISO(w.date) && w.date.startsWith(y + '-')) { cnt.set(w.date, (cnt.get(w.date) || 0) + 1); if (!idOf.has(w.date)) idOf.set(w.date, w.id); }
+  const offset = weekdayIdx(`${y}-01-01`);
+  const days = Math.round((new Date(y + 1, 0, 1) - new Date(y, 0, 1)) / 864e5);
+  const cols = Math.ceil((offset + days) / 7);
+  const cells = [];
+  for (let i = 0; i < offset; i++) cells.push(h('i', { class: 'hm e' }));
+  for (let i = 0; i < days; i++) {
+    const d = isoDate(new Date(y, 0, 1 + i)), c = cnt.get(d) || 0;
+    const el = h(c ? 'a' : 'i', { class: `hm l${Math.min(c, 3)}` + (d === today ? ' today' : ''), title: `${fmtDate(d)}${c ? `: тренировок ${c}` : ''}` });
+    if (c) el.href = '#/w/' + idOf.get(d);
+    cells.push(el);
+  }
+  const months = MONTH_SHORT.map((m, i) => {
+    const col = Math.floor((offset + Math.round((new Date(y, i, 1) - new Date(y, 0, 1)) / 864e5)) / 7);
+    return h('span', { style: `grid-column:${col + 1}` }, m);
+  });
+  const total = [...cnt.values()].reduce((a, b) => a + b, 0);
+  const wk = weekCounts(db); let okWeeks = 0, active = 0;
+  for (const [k, v] of wk) if (k.slice(0, 4) === String(y) || addDays(k, 6).slice(0, 4) === String(y)) { active++; if (v >= db.settings.perWeek) okWeeks++; }
+  // самая длинная пауза между тренировками внутри года
+  const ds = [...cnt.keys()].sort(); let gap = 0;
+  for (let i = 1; i < ds.length; i++) gap = Math.max(gap, daysBetween(ds[i - 1], ds[i]) - 1);
+  const scroller = h('div', { class: 'hm-scroll' }, h('div', { class: 'hm-wrap' },
+    h('div', { class: 'hm-months', style: `grid-template-columns:repeat(${cols},14px)` }, months),
+    h('div', { class: 'hm-body' },
+      h('div', { class: 'hm-days' }, ['Пн', '', 'Ср', '', 'Пт', '', ''].map((x) => h('span', {}, x))),
+      h('div', { class: 'hm-grid', style: `grid-template-columns:repeat(${cols},14px)` }, cells))));
+  setTimeout(() => { if (y === new Date().getFullYear()) scroller.scrollLeft = scroller.scrollWidth; }, 0);
+  return h('section', { class: 'card' },
+    h('div', { class: 'row between wrap' }, h('h3', {}, 'Календарь тренировок'),
+      h('div', { class: 'row' }, h('button', { class: 'ico', 'aria-label': 'Предыдущий год', onclick: () => { heatYear--; refresh(); } }, '‹'), h('b', {}, y),
+        h('button', { class: 'ico', 'aria-label': 'Следующий год', onclick: () => { heatYear++; refresh(); } }, '›'))),
+    scroller,
+    h('div', { class: 'hm-legend' }, h('small', { class: 'muted' }, 'меньше'), ['l0', 'l1', 'l2', 'l3'].map((c) => h('i', { class: 'hm ' + c })), h('small', { class: 'muted' }, 'больше')),
+    h('div', { class: 'tiles' },
+      h('div', { class: 'tile' }, h('small', { class: 'muted' }, 'Тренировок за год'), h('b', {}, total)),
+      h('div', { class: 'tile' }, h('small', { class: 'muted' }, 'Недель с целью'), h('b', {}, `${okWeeks} из ${active}`), h('small', { class: 'muted' }, `цель ${db.settings.perWeek} в неделю`)),
+      h('div', { class: 'tile' }, h('small', { class: 'muted' }, 'Самая долгая пауза'), h('b', {}, gap ? `${gap} дн.` : '—'))));
+}
+
+// ---------- поиск по комментариям ----------
+let commentQ = '';
+function commentsView() {
+  const db = state.db;
+  const out = h('div', {});
+  const input = h('input', { class: 'search', placeholder: '🔍 Искать по комментариям и заметкам…', value: commentQ, autocomplete: 'off', 'aria-label': 'Поиск по комментариям' });
+  const hl = (text, q) => {
+    const i = text.toLowerCase().indexOf(q); if (i < 0) return text;
+    return [text.slice(0, i), h('mark', {}, text.slice(i, i + q.length)), text.slice(i + q.length)];
+  };
+  const paint = () => {
+    const q = input.value.trim().toLowerCase(); commentQ = input.value;
+    if (q.length < 2) { out.replaceChildren(h('p', { class: 'muted small' }, 'Ищет по описанию тренировки, заметке о тренировке, комментариям к упражнениям и к отдельным кругам, а также по тексту свободных блоков.')); return; }
+    const found = [];
+    for (const w of [...db.workouts].sort(byDateDesc)) {
+      const add = (where, text) => { if (text && String(text).toLowerCase().includes(q)) found.push({ w, where, text: String(text) }); };
+      add('Описание', w.plan); add('Заметка', w.note);
+      for (const it of w.items) {
+        const nm = it.type === 'sets' ? it.exercise : it.title || 'Блок';
+        add(nm, it.note); add(nm, it.text); add(nm, it.result); add(nm, it.moves);
+        if (it.type === 'sets') it.sets.forEach((s, i) => add(`${nm} · круг ${i + 1}`, s.note));
+      }
+    }
+    out.replaceChildren(h('p', { class: 'muted small' }, found.length ? `Найдено: ${found.length}` : 'Ничего не найдено'),
+      ...found.slice(0, 200).map((f) => h('a', { class: 'card cm', href: '#/w/' + f.w.id },
+        h('div', { class: 'row between' }, h('b', {}, f.where), h('small', { class: 'muted' }, `${fmtDate(f.w.date, false)} · ${wName(f.w)}`)),
+        h('div', { class: 'cm-text' }, hl(f.text.length > 240 ? f.text.slice(0, 240) + '…' : f.text, q)))));
+  };
+  input.addEventListener('input', paint); paint();
+  return h('div', {}, input, out);
+}
+
+// ---------- сравнение на странице упражнения ----------
+let cmpMode = 'last', cmpPick = 0; // cmpPick: 0 — последнее занятие, иначе индекс с конца
+function compareCard(hist, name) {
+  const db = state.db;
+  if (hist.length < 2) return null;
+  const idx = Math.min(cmpPick, hist.length - 1), cur = hist[hist.length - 1 - idx];
+  const c = compareItem(db, cur.w, cur.it, cmpMode);
+  const body = h('div', {});
+  if (!c.prev) body.append(h('p', { class: 'muted' }, 'Для этого занятия нет более раннего с чем сравнить.'));
+  else {
+    const n = Math.max(filledSets(cur.it).length, filledSets(c.prev.it).length);
+    const cell = (v, ref, cls) => h('td', { class: cls || '' }, v === null || v === undefined ? '—' : fmtNum(v));
+    const rows = Array.from({ length: n }, (_, i) => {
+      const s = cur.it.sets[i] || {}, p = c.prev.it.sets[i] || {}, d = c.cells[i] || {};
+      return h('tr', {}, h('td', { class: 'n' }, i + 1), cell(num(p.w)), cell(num(s.w), p.w, d.w), cell(num(p.r)), cell(num(s.r), p.r, d.r));
+    });
+    body.append(
+      h('div', { class: 'chips' }, h('span', { class: 'chip' }, `${c.prev.label}: ${fmtDate(c.prev.w.date, false)}`),
+        c.volPct !== null ? h('span', { class: 'chip ' + (c.volPct > 0.5 ? 'better' : c.volPct < -0.5 ? 'worse' : '') }, `объём ${c.volPct > 0 ? '+' : '−'}${Math.abs(Math.round(c.volPct))}% (${Math.round(c.curVol)} против ${Math.round(c.prevVol)})`) : null,
+        c.roundsDelta ? h('span', { class: 'chip ' + (c.roundsDelta > 0 ? 'better' : 'worse') }, `${c.roundsDelta > 0 ? '+' : '−'}${Math.abs(c.roundsDelta)} кр.`) : null),
+      h('table', { class: 'sets cmp' }, h('thead', {}, h('tr', {}, h('th', {}, 'Круг'), h('th', {}, 'Вес было'), h('th', {}, 'Вес стало'), h('th', {}, 'Повт. было'), h('th', {}, 'Повт. стало'))), h('tbody', {}, rows)));
+  }
+  const sel = h('select', { class: 'sel', 'aria-label': 'Какое занятие сравнить', value: String(idx), onchange: (e) => { cmpPick = Number(e.target.value); refresh(); } },
+    hist.slice(-12).reverse().map((e, i) => h('option', { value: String(i) }, `${fmtDate(e.w.date, false)}${i === 0 ? ' (последнее)' : ''}`)));
+  return h('section', { class: 'card' }, h('h3', {}, 'Сравнение'),
+    h('div', { class: 'row wrap' }, h('div', { class: 'seg' }, COMPARE_MODES.map(([k, l]) => h('button', { class: 'pill' + (cmpMode === k ? ' on' : ''), onclick: () => { cmpMode = k; refresh(); } }, l))), sel),
+    body, h('small', { class: 'muted' }, `«${name}»: зелёное — лучше, чем в выбранном сравнении, красное — хуже. Что показывать прямо в тренировке — в Настройках.`));
+}
+
 export function analyticsView(name) {
   const db = state.db;
   const root = h('div', { class: 'page' });
@@ -198,9 +290,13 @@ export function analyticsView(name) {
     put(root, h('h1', {}, 'Аналитика'),
       exerciseList((n) => { location.hash = '#/analytics/' + encodeURIComponent(n); }, 200, { top: true, onQuery: (q) => { body.hidden = !!q; } }),
       body);
-    put(body, h('div', { class: 'row wrap' }, pill('fav', `★ Избранное (${favs.length})`), pill('plateau', `Плато (${plateaus.length})`), pill('all', 'Все упражнения')));
+    put(body, h('div', { class: 'row wrap' }, pill('fav', `★ Избранное (${favs.length})`), pill('plateau', `Плато (${plateaus.length})`), pill('all', 'Все упражнения'), pill('heat', '🗓 Календарь'), pill('comments', '💬 Комментарии')));
     if (tab === 'fav') {
       put(body, favs.length ? favs.map(favCard) : h('section', { class: 'card empty' }, 'Здесь будут упражнения, за которыми ты хочешь следить. Нажми ☆ рядом с названием — в тренировке или на странице упражнения.'));
+    } else if (tab === 'heat') {
+      put(body, heatView());
+    } else if (tab === 'comments') {
+      put(body, commentsView());
     } else if (tab === 'plateau') {
       put(body, h('p', { class: 'muted small' }, `Плато — когда в последних ${plateauCfg(db)[0]} выполнениях упражнения не вырос ни вес, ни общий объём (больше чем на ${plateauCfg(db)[1]}%). Это не ошибка: иногда так и задумано тренером. Менять правило можно в Настройках.`),
         plateaus.length ? plateaus.map(({ e, pl, hist }) => h('a', { class: 'card', href: '#/analytics/' + encodeURIComponent(e.name) },
@@ -223,28 +319,28 @@ export function analyticsView(name) {
   const tile = (label, value, sub) => h('div', { class: 'tile' }, h('small', { class: 'muted' }, label), h('b', {}, value), sub ? h('small', { class: 'muted' }, sub) : null);
 
   const mode = analyticsView.mode || 'session';
+  const cstats = stats.filter((x) => inPeriod(exPeriod, x.e.w.date)); // графики — только за выбранный период
   const volSeries = () => {
     if (mode === 'week') {
       const wk = new Map();
-      for (const x of stats) { const k = weekStart(x.e.w.date); wk.set(k, (wk.get(k) || 0) + x.s.vol); }
+      for (const x of cstats) { const k = weekStart(x.e.w.date); wk.set(k, (wk.get(k) || 0) + x.s.vol); }
       return [...wk].map(([k, v]) => ({ label: fmtShort(k), value: Math.round(v), tip: `Неделя с ${fmtShort(k)}: ${Math.round(v)}` }));
     }
-    return stats.map((x) => ({ label: fmtShort(x.e.w.date), value: Math.round(x.s.vol), tip: `${x.e.w.date}: ${Math.round(x.s.vol)}` }));
+    return cstats.map((x) => ({ label: fmtShort(x.e.w.date), value: Math.round(x.s.vol), tip: `${x.e.w.date}: ${Math.round(x.s.vol)}` }));
   };
-  const wBox = h('div', {}, lineChart([
-    { name: 'Макс. вес', cls: 's1', points: stats.filter((x) => x.s.maxW !== null).map((x) => ({ x: x.e.w.date, y: x.s.maxW, tip: setsLine(x.e.it.sets) })) },
-    { name: 'Средний рабочий', cls: 's2', points: stats.filter((x) => x.s.avgW).map((x) => ({ x: x.e.w.date, y: Math.round(x.s.avgW * 10) / 10 })) }], { unit: 'кг' }));
+  const wBox = h('div', {}, !cstats.length ? h('div', { class: 'empty small' }, 'Нет занятий за выбранный период') : lineChart([
+    { name: 'Макс. вес', cls: 's1', points: cstats.filter((x) => x.s.maxW !== null).map((x) => ({ x: x.e.w.date, y: x.s.maxW, tip: setsLine(x.e.it.sets) })) },
+    { name: 'Средний рабочий', cls: 's2', points: cstats.filter((x) => x.s.avgW).map((x) => ({ x: x.e.w.date, y: Math.round(x.s.avgW * 10) / 10 })) }], { unit: 'кг' }));
   const volTitle = meta.unit === 'sec' ? 'Сколько секунд за тренировку' : hasWeight ? 'Сколько всего поднято' : 'Сколько повторов всего';
   const chartBox = h('div', {});
-  const paintVol = () => chartBox.replaceChildren(barChart(volSeries()));
+  const paintVol = () => chartBox.replaceChildren(cstats.length ? barChart(volSeries()) : h('div', { class: 'empty small' }, 'Нет занятий за выбранный период'));
   paintVol();
 
   put(root, 
-    h('div', { class: 'row between wrap' }, h('a', { class: 'back', href: '#/analytics' }, '← Аналитика'),
-      h('div', { class: 'row' },
-        h('button', { class: 'btn small', onclick: () => { const e = ensureExercise(db, name); e.fav = !e.fav; markChanged(); refresh(); } }, (findExercise(db, name) || {}).fav ? '★ В избранном' : '☆ В избранное'),
-        h('button', { class: 'btn small', onclick: () => mergeDialog(name, '', (nn) => { location.hash = '#/analytics/' + encodeURIComponent(nn); }) }, '✎ Переименовать / объединить'))),
-    h('h1', {}, name),
+    h('div', { class: 'ex-sticky' }, h('a', { class: 'back', href: '#/analytics', 'aria-label': 'Назад', title: 'Назад' }, '←'),
+      h('h1', { title: name }, name),
+      h('button', { class: 'ico star', title: 'Избранное', 'aria-label': 'Избранное', onclick: () => { const e = ensureExercise(db, name); e.fav = !e.fav; markChanged(); refresh(); } }, (findExercise(db, name) || {}).fav ? '★' : '☆'),
+      h('button', { class: 'ico', title: 'Переименовать / объединить', 'aria-label': 'Переименовать', onclick: () => mergeDialog(name, '', (nn) => { location.hash = '#/analytics/' + encodeURIComponent(nn); }) }, '✎')),
     meta.assist ? h('div', { class: 'chips' }, h('span', { class: 'chip' }, 'вес = облегчение: меньше лучше')) : null,
     !hist.length ? h('section', { class: 'card empty' }, 'По этому упражнению пока нет заполненных тренировок.') : null,
     pl ? h('section', { class: 'card warn' }, `⚠ Плато: за последние ${pl.sessions} раза (с ${fmtDate(pl.since)}) вес и объём не росли. Может, пора изменить вес, число кругов или повторов — или это осознанное решение тренера.`) : null);
@@ -255,6 +351,7 @@ export function analyticsView(name) {
       tile('Всего раз', hist.length, `с ${fmtDate(hist[0].w.date, false)}`),
       best ? tile(meta.assist ? 'Меньше всего облегчения' : 'Макс. вес', `${fmtNum(meta.assist ? best.s.minW : best.s.maxW)} кг`, fmtDate(best.e.w.date, false)) : tile('Макс. за раз', fmtNum(Math.max(...stats.map((x) => x.s.reps))), unitWord),
       prev ? tile('Всего vs прошлый раз', `${last.s.vol >= prev.s.vol ? '+' : '−'}${prev.s.vol ? Math.abs(Math.round(((last.s.vol - prev.s.vol) / prev.s.vol) * 100)) : 0}%`, `${Math.round(last.s.vol)} vs ${Math.round(prev.s.vol)}`) : tile('Объём', Math.round(last.s.vol), 'первая запись')),
+    h('div', { class: 'row between wrap pf-row' }, h('small', { class: 'muted' }, `Графики: ${periodText(exPeriod)}`), periodBar(exPeriod, hist.map((x) => x.w.date))),
     hasWeight ? h('section', { class: 'card' }, h('div', { class: 'row between wrap' }, h('h3', {}, 'Вес по времени'),
       copyBtn(() => wBox, { title: `${name} — вес по времени`, legend: [{ cls: 's1', label: 'Макс. вес' }, { cls: 's2', label: 'Средний (с учётом повторов)' }] })), wBox,
       h('div', { class: 'legend' }, h('span', { class: 'sw s1' }), 'Макс. вес', h('span', { class: 'sw s2' }), 'Средний (с учётом повторов)')) : null,
@@ -262,6 +359,7 @@ export function analyticsView(name) {
       h('div', { class: 'row wrap' }, h('div', { class: 'seg' }, [['session', 'По тренировкам'], ['week', 'По неделям']].map(([k, l]) => h('button', { class: 'pill' + (mode === k ? ' on' : ''), onclick: () => { analyticsView.mode = k; refresh(); } }, l))),
         copyBtn(chartBox, () => ({ title: `${name} — ${volTitle.toLowerCase()} (${mode === 'week' ? 'по неделям' : 'по тренировкам'})` })))), chartBox,
       h('p', { class: 'muted small' }, volExplain(last, meta, hasWeight))),
+    compareCard(hist, name),
     h('section', { class: 'card' }, h('h3', {}, 'История'),
       h('div', { class: 'hist' }, [...stats].reverse().map((x) => h('a', { class: 'hist-row', href: '#/w/' + x.e.w.id },
         h('b', {}, fmtDate(x.e.w.date)), h('span', { class: 'muted' }, wName(x.e.w)),
@@ -286,18 +384,19 @@ export function bodyView() {
   const date = h('input', { type: 'date', class: 'date-in', value: todayISO() });
   const inputs = Object.fromEntries(BODY.map(([k, l, u]) => [k, h('input', { class: 'num', inputmode: 'decimal', placeholder: u })]));
   const fill = (d) => { const m = db.measures.find((x) => x.date === d); for (const [k] of BODY) inputs[k].value = m ? fmtNum(m[k]) : ''; };
-  date.addEventListener('change', () => fill(date.value)); fill(date.value);
+  const clear = () => { for (const [k] of BODY) inputs[k].value = ''; };
+  date.addEventListener('change', () => fill(date.value));
   const save = () => {
     if (!isISO(date.value)) { toast('Выбери дату'); return; }
     const rec = { date: date.value, ...Object.fromEntries(BODY.map(([k]) => [k, num(parseInput(inputs[k].value))])) };
     if (BODY.every(([k]) => rec[k] === null)) { toast('Заполни хотя бы одно поле — пустую запись сохранить нельзя'); return; }
     db.measures = db.measures.filter((x) => x.date !== rec.date); db.measures.push(rec);
-    db.measures.sort((a, b) => (a.date < b.date ? -1 : 1)); markChanged(); toast('Сохранено'); refresh();
+    db.measures.sort((a, b) => (a.date < b.date ? -1 : 1)); markChanged(); toast('Сохранено'); clear(); date.value = todayISO(); refresh();
   };
   put(root, h('h1', {}, 'Замеры'),
     h('section', { class: 'card' }, h('div', { class: 'row wrap' }, date), h('div', { class: 'grid4' }, BODY.map(([k, l, u]) => h('label', { class: 'fld' }, h('span', {}, `${l}, ${u}`), inputs[k]))),
       h('div', { class: 'row end' }, h('button', { class: 'btn primary', onclick: save }, 'Сохранить'))),
-    h('section', { class: 'card' }, h('div', { class: 'row between wrap' }, h('h3', {}, 'Графики'), periodBar(bodyPeriod, { allowAll: true }))),
+    h('div', { class: 'row between wrap' }, h('h2', {}, 'Графики'), periodBar(bodyPeriod, [...db.measures.map((m) => m.date)])),
     ...BODY.map(([k, l, u]) => {
       const [from, to] = periodRange(bodyPeriod);
       const pts = db.measures.filter((m) => m[k] !== null && m[k] !== undefined && isISO(m.date) && m.date >= from && m.date <= to).map((m) => ({ x: m.date, y: m[k] }));

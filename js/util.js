@@ -86,12 +86,36 @@ export function toast(msg, ms = 2600, action = null) {
 /** plural(2, ['круг','круга','кругов']) → 'круга' */
 export const plural = (n, f) => { n = Math.abs(n) % 100; const d = n % 10; return n > 10 && n < 20 ? f[2] : d > 1 && d < 5 ? f[1] : d === 1 ? f[0] : f[2]; };
 
+/** Стек шторок: системная кнопка «назад» сначала закрывает верхнюю шторку. */
+const mstack = [];
+let mseq = 0, skipPop = 0;
+addEventListener('popstate', () => {
+  if (skipPop > 0) { skipPop--; return; }
+  const top = mstack[mstack.length - 1];
+  if (top) top.fromPop();
+});
+
 /** modal(close => элемент, onClose?) → close() */
 export function modal(build, onClose) {
   const back = h('div', { class: 'modal-back' });
   const box = h('div', { class: 'modal' });
+  const id = ++mseq;
+  let closed = false;
   const esc = (e) => { if (e.key === 'Escape') close(); };
-  function close() { back.remove(); document.removeEventListener('keydown', esc); onClose && onClose(); }
+  function cleanup() {
+    if (closed) return false;
+    closed = true;
+    const i = mstack.findIndex((m) => m.id === id); if (i >= 0) mstack.splice(i, 1);
+    back.remove(); document.removeEventListener('keydown', esc); onClose && onClose();
+    return true;
+  }
+  function close() {
+    if (!cleanup()) return;
+    // убрать нашу запись из истории, если мы всё ещё на ней
+    if (history.state && history.state.modal === id) { skipPop++; history.back(); }
+  }
+  mstack.push({ id, fromPop: cleanup });
+  try { history.pushState({ modal: id }, ''); } catch { /* ignore */ }
   back.addEventListener('mousedown', (e) => { if (e.target === back) close(); });
   document.addEventListener('keydown', esc);
   box.append(build(close));

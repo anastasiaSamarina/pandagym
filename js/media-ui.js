@@ -3,32 +3,30 @@ import { h, toast, modal, uid } from './util.js';
 import { touch, putMedia } from './store.js';
 import { mediaUrl } from './sync.js';
 
-// ---------- фото и GIF ----------
-async function shrinkImage(file) {
-  if (file.type === 'image/gif' || /\.gif$/i.test(file.name || '')) {
-    if (file.size > 8 * 1024 * 1024) throw new Error('GIF больше 8 МБ — сожми его или добавь ссылкой на видео');
-    return { blob: file, ext: '.gif' };
-  }
-  const bmp = await createImageBitmap(file);
-  const k = Math.min(1, 1280 / Math.max(bmp.width, bmp.height));
-  const cv = document.createElement('canvas');
-  cv.width = Math.round(bmp.width * k); cv.height = Math.round(bmp.height * k);
-  cv.getContext('2d').drawImage(bmp, 0, 0, cv.width, cv.height);
-  const blob = await new Promise((r) => cv.toBlob(r, 'image/jpeg', 0.82));
-  return { blob, ext: '.jpg' };
+// ---------- файлы: фото, GIF, короткие видео (хранятся как есть, без пережатия) ----------
+const EXTS = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'mp4', 'm4v', 'mov', 'webm'];
+const MAX_MB = 25;
+export const isVideoId = (id) => /\.(mp4|m4v|mov|webm)$/i.test(id);
+/** Только расширения в accept: тогда телефон открывает обычный выбор файлов, а не только «Google Фото» */
+const ACCEPT = EXTS.map((e) => '.' + e).join(',');
+function extOf(f) {
+  const m = /\.(\w+)$/.exec(f.name || ''); const e = m && m[1].toLowerCase();
+  if (e && EXTS.includes(e)) return e === 'jpeg' ? 'jpg' : e;
+  const t = (f.type || '').split('/')[1] || '';
+  return EXTS.includes(t) ? t : /^image/.test(f.type) ? 'jpg' : /^video/.test(f.type) ? 'mp4' : null;
 }
-/** accept: 'image/*' — галерея телефона; '.gif,image/gif' — обычный выбор файла (в галерее Android гифки часто не видны) */
-function attach(it, w, rerender, accept) {
-  const input = h('input', { type: 'file', accept, style: 'display:none' });
+function attach(it, w, rerender) {
+  const input = h('input', { type: 'file', accept: ACCEPT, multiple: true, style: 'display:none' });
   input.addEventListener('change', async () => {
-    const f = input.files[0]; if (!f) return;
-    try {
-      const { blob, ext } = await shrinkImage(f);
-      const id = uid('m') + ext;
-      await putMedia(id, blob, false);
-      (it.media ||= []).push(id);
-      touch(w); rerender();
-    } catch (e) { toast(e.message || 'Не удалось добавить файл', 4000); }
+    let added = 0;
+    for (const f of [...input.files]) {
+      const ext = extOf(f);
+      if (!ext) { toast(`«${f.name}»: такой формат не поддерживается (jpg, png, gif, webp, mp4)`, 5000); continue; }
+      if (f.size > MAX_MB * 1024 * 1024) { toast(`«${f.name}» больше ${MAX_MB} МБ — сожми видео или добавь ссылкой`, 6000); continue; }
+      try { const id = uid('m') + '.' + ext; await putMedia(id, f, false); (it.media ||= []).push(id); added++; }
+      catch (e) { toast(e.message || 'Не удалось добавить файл', 4000); }
+    }
+    if (added) { touch(w); rerender(); }
     input.remove();
   });
   document.body.append(input); input.click(); setTimeout(() => input.remove(), 120000);
@@ -37,11 +35,23 @@ function openImage(src) { modal((close) => h('img', { src, class: 'big-img', onc
 
 export function mediaStrip(it, w, rerender) {
   if (!it.media || !it.media.length) return null;
+  const remove = (id) => h('button', { class: 'x', title: 'Убрать', onclick: () => { it.media = it.media.filter((m) => m !== id); touch(w); rerender(); } }, '✕');
   return h('div', { class: 'media-strip' }, it.media.map((id) => {
+    if (isVideoId(id)) {
+      // видео играет прямо в карточке: без звука, по кругу, само (когда попадает на экран)
+      const v = h('video', { class: 'media-video', playsinline: true, controls: true, preload: 'metadata' });
+      v.muted = true; v.loop = true; v.autoplay = true; v.setAttribute('playsinline', '');
+      mediaUrl(id).then((u) => {
+        if (!u) { v.replaceWith(h('div', { class: 'thumb missing' }, 'нет файла')); return; }
+        v.src = u;
+        if ('IntersectionObserver' in window) new IntersectionObserver((es) => es.forEach((e) => { if (e.isIntersecting) v.play().catch(() => {}); else v.pause(); }), { threshold: 0.4 }).observe(v);
+        else v.play().catch(() => {});
+      });
+      return h('div', { class: 'thumb-wrap video-wrap' }, v, remove(id));
+    }
     const img = h('img', { alt: '', class: 'thumb', onclick: () => img.src && openImage(img.src) });
     mediaUrl(id).then((u) => { if (u) img.src = u; else img.replaceWith(h('div', { class: 'thumb missing' }, 'нет файла')); });
-    return h('div', { class: 'thumb-wrap' }, img,
-      h('button', { class: 'x', title: 'Убрать', onclick: () => { it.media = it.media.filter((m) => m !== id); touch(w); rerender(); } }, '✕'));
+    return h('div', { class: 'thumb-wrap' }, img, remove(id));
   }));
 }
 
@@ -96,11 +106,10 @@ function linkDialog(it, w, rerender) {
   setTimeout(() => input.focus(), 50);
 }
 
-/** Кнопки «фото / GIF / видео» — теперь на виду, а не в меню «⋯» */
+/** Одна кнопка для любых файлов + ссылка на видео */
 export function mediaButtons(it, w, rerender) {
   return [
-    h('button', { class: 'btn small', onclick: () => attach(it, w, rerender, 'image/*') }, '📷 Фото'),
-    h('button', { class: 'btn small', title: 'Выбрать файл .gif', onclick: () => attach(it, w, rerender, '.gif,image/gif') }, '🎞 GIF'),
-    h('button', { class: 'btn small', onclick: () => linkDialog(it, w, rerender) }, '🔗 Видео'),
+    h('button', { class: 'btn small', title: 'Фото, GIF или короткое видео (jpg, png, gif, webp, mp4)', onclick: () => attach(it, w, rerender) }, '📎 Файл'),
+    h('button', { class: 'btn small', onclick: () => linkDialog(it, w, rerender) }, '🔗 Ссылка'),
   ];
 }

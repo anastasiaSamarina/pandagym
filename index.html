@@ -8,7 +8,7 @@
   <meta name="theme-color" content="#14161c" media="(prefers-color-scheme: dark)">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
-  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
   <link rel="stylesheet" href="css/app.css">
 </head>
 <body>
@@ -18,6 +18,17 @@
   </div>
   <div id="toast" role="status"></div>
   <noscript>Для работы приложения нужен JavaScript.</noscript>
+  <script>
+    // Из file:// браузер не запускает модули JS — вместо пустой страницы объясняем, что делать
+    if (location.protocol === 'file:') document.addEventListener('DOMContentLoaded', function () {
+      document.getElementById('view').innerHTML = '<div style="max-width:560px;margin:40px auto;padding:0 16px;font:16px/1.5 system-ui">' +
+        '<h2>Приложение нельзя открыть двойным кликом по index.html</h2>' +
+        '<p>Браузер блокирует скрипты из локального файла. Запусти маленький локальный сервер:</p>' +
+        '<ol><li>Mac: дважды кликни <b>start.command</b> в этой папке.</li>' +
+        '<li>Или в терминале в папке проекта: <code>python3 -m http.server 8000</code>, затем открой <b>http://localhost:8000</b></li></ol>' +
+        '<p>После публикации на GitHub Pages ничего запускать не нужно — просто открывай ссылку.</p></div>';
+    });
+  </script>
   <script src="vendor/jszip.min.js"></script>
   <script type="module" src="js/main.js"></script>
 </body>

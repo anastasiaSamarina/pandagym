@@ -104,12 +104,12 @@ export function renderWorkoutCanvas(w, { withColors = true } = {}) {
 
   let y = headH;
   ctx.fillStyle = C.head; ctx.fillRect(0, y, W, tableHead);
-  ctx.fillStyle = C.muted; ctx.font = `600 22px ${FONT}`;
-  ctx.fillText('УПРАЖНЕНИЕ', cols.name, y + 33);
+  ctx.fillStyle = C.muted; ctx.font = `600 26px ${FONT}`;
+  ctx.fillText('🏋️', cols.name, y + 34);
   ctx.textAlign = 'center';
-  ctx.fillText('КРУГОВ', cols.rounds + colW.rounds / 2, y + 33);
-  ctx.fillText('ВЕС, КГ', cols.weight + colW.weight / 2, y + 33);
-  ctx.fillText('ПОВТОРЫ', cols.reps + colW.reps / 2, y + 33);
+  ctx.fillText('🔁', cols.rounds + colW.rounds / 2, y + 33);
+  ctx.fillText('⚖️', cols.weight + colW.weight / 2, y + 33);
+  ctx.fillText('🔢', cols.reps + colW.reps / 2, y + 33);
   ctx.textAlign = 'left';
   y += tableHead;
 
@@ -119,6 +119,7 @@ export function renderWorkoutCanvas(w, { withColors = true } = {}) {
     const sepTxt = ' / ';
     for (; fs > 16; fs -= 2) { ctx.font = `600 ${fs}px ${FONT}`; if (values.reduce((a, v) => a + ctx.measureText(v).width, 0) + ctx.measureText(sepTxt).width * (values.length - 1) <= maxW) break; }
     ctx.font = `600 ${fs}px ${FONT}`;
+    ctx.textAlign = 'left'; // иначе наследуется «center» от соседней колонки и цифры наезжают на «/»
     const sep = ' / ';
     const sepW = ctx.measureText(sep).width;
     const widths = values.map((v) => ctx.measureText(v).width);

@@ -86,8 +86,7 @@ export function startRest(sec) {
   keepAlive('Отдых'); askNotify();
   endAt = Date.now() + sec * 1000; done = false;
   const time = h('b', { class: 'rest-time' }), label = h('span', { class: 'rest-label' }, 'Отдых');
-  const adj = (d) => h('button', { class: 'btn small', onclick: () => { if (keep && keep.src !== silenceUrl) { keep.pause(); keepAlive('Отдых'); } endAt += d * 1000; done = false; bar.classList.remove('done'); label.textContent = 'Отдых'; paint(); } }, `${d > 0 ? '+' : '−'}${Math.abs(d)} с`);
-  bar = h('div', { class: 'rest-bar', role: 'timer' }, label, time, adj(-15), adj(15),
+  bar = h('div', { class: 'rest-bar', role: 'timer' }, label, time,
     h('button', { class: 'btn small', onclick: stopRest }, '✕'));
   document.body.append(bar);
   try { navigator.wakeLock && navigator.wakeLock.request('screen').then((l) => { lock = l; }).catch(() => {}); } catch { /* ignore */ }

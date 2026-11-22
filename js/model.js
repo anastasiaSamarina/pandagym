@@ -18,7 +18,7 @@ import { weekStart, parseISO, isoDate, addDays, isISO } from './util.js';
 
 export const emptyDb = () => ({
   v: 1, rev: 0,
-  settings: { perWeek: 3, currentCycle: 'Цикл 1', cycles: ['Цикл 1'], restSec: 60, plateauN: 4, plateauPct: 3, notDup: [] },
+  settings: { perWeek: 3, currentCycle: 'Цикл 1', cycles: ['Цикл 1'], restSec: 60, plateauN: 4, plateauPct: 3, compareMode: 'last', notDup: [] },
   exercises: [], workouts: [], measures: [], deleted: [],
   importLog: [], // что нашёл/исправил импорт старой таблицы (хранится только на устройстве, см. «Проверка данных»)
 });
@@ -160,9 +160,33 @@ export function diffSets(prevSets, curSets, assist = false) {
   return cells;
 }
 
-export function compareItem(db, w, it) {
+/** С чем сравнивать: 'last' — прошлый раз, 'best' — лучший по объёму, 'avg4' — среднее за последние 4 раза */
+export const COMPARE_MODES = [['last', 'С прошлым разом'], ['best', 'С лучшим разом'], ['avg4', 'Со средним за 4 раза']];
+export function refFor(db, w, it, mode = 'last') {
   const meta = exMeta(db, it.exercise);
-  const prev = prevOf(db, w, it);
+  const hist = historyOf(db, it.exercise).filter((e) => e.w.id !== w.id && e.w.date < w.date);
+  if (!hist.length) return null;
+  if (mode === 'best') {
+    let best = hist[0], bv = setStats(best.it.sets, meta).vol;
+    for (const e of hist) { const v = setStats(e.it.sets, meta).vol; if (v >= bv) { best = e; bv = v; } }
+    return { w: best.w, it: best.it, label: 'Лучший раз' };
+  }
+  if (mode === 'avg4') {
+    const last = hist.slice(-4), n = Math.max(...last.map((e) => filledSets(e.it).length));
+    const avg = (xs) => { const v = xs.map(num).filter((x) => x !== null); return v.length ? Math.round((v.reduce((a, b) => a + b, 0) / v.length) * 10) / 10 : null; };
+    const sets = Array.from({ length: n }, (_, i) => {
+      const at = last.map((e) => e.it.sets[i]).filter(Boolean);
+      return { w: avg(at.map((x) => x.w)), r: avg(at.map((x) => x.r)), note: '' };
+    });
+    return { w: last.at(-1).w, it: { sets, tempo: null }, label: `Среднее за ${last.length} ${last.length === 1 ? 'раз' : 'раза'}` };
+  }
+  const p = hist[hist.length - 1];
+  return { w: p.w, it: p.it, label: 'Прошлый раз' };
+}
+
+export function compareItem(db, w, it, mode) {
+  const meta = exMeta(db, it.exercise);
+  const prev = refFor(db, w, it, mode || db.settings.compareMode || 'last');
   if (!prev) return { prev: null, cells: [], roundsDelta: 0, volPct: null, meta };
   const cur = setStats(it.sets, meta), old = setStats(prev.it.sets, meta);
   return {
@@ -196,12 +220,23 @@ export function weekCounts(db) {
   for (const d of workoutDates(db)) { const k = weekStart(d); m.set(k, (m.get(k) || 0) + 1); }
   return m;
 }
-/** Серия подряд идущих недель, где цель выполнена (текущая неделя не ломает серию, пока не закончилась) */
+/**
+ * «Мягкая» серия недель: недели без единой тренировки (болезнь, отпуск) серию НЕ обнуляют — они просто пропускаются.
+ * Серию прерывает только неделя, где тренировки были, но цель не выполнена. Текущая неделя серию не ломает, пока не закончилась.
+ */
 export function weekStreak(db, today) {
   const counts = weekCounts(db), goal = db.settings.perWeek || 1;
+  const first = workoutDates(db)[0];
+  if (!first) return 0;
+  const firstK = weekStart(first);
   let k = weekStart(today), streak = 0;
   if ((counts.get(k) || 0) < goal) k = addDays(k, -7);
-  while ((counts.get(k) || 0) >= goal) { streak++; k = addDays(k, -7); }
+  while (k >= firstK) {
+    const c = counts.get(k) || 0;
+    if (c >= goal) streak++;
+    else if (c > 0) break;
+    k = addDays(k, -7);
+  }
   return streak;
 }
 
