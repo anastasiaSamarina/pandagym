@@ -89,11 +89,18 @@ export const plural = (n, f) => { n = Math.abs(n) % 100; const d = n % 10; retur
 /** Стек шторок: системная кнопка «назад» сначала закрывает верхнюю шторку. */
 const mstack = [];
 let mseq = 0, skipPop = 0;
+let afterBack = null; // переход, который ждёт завершения «назад» после закрытия шторки
 addEventListener('popstate', () => {
-  if (skipPop > 0) { skipPop--; return; }
+  if (skipPop > 0) { skipPop--; if (!skipPop && afterBack) { const f = afterBack; afterBack = null; f(); } return; }
   const top = mstack[mstack.length - 1];
   if (top) top.fromPop();
 });
+
+/** Перейти на другой экран; если только что закрыли шторку — дождаться, пока браузер закончит «назад» (иначе он откатит переход). */
+export function goto(hash) {
+  if (skipPop > 0) afterBack = () => { location.hash = hash; };
+  else location.hash = hash;
+}
 
 /** modal(close => элемент, onClose?) → close() */
 export function modal(build, onClose) {
@@ -106,15 +113,18 @@ export function modal(build, onClose) {
     if (closed) return false;
     closed = true;
     const i = mstack.findIndex((m) => m.id === id); if (i >= 0) mstack.splice(i, 1);
-    back.remove(); document.removeEventListener('keydown', esc); onClose && onClose();
+    back.remove(); document.removeEventListener('keydown', esc);
+    if (!mstack.length) document.documentElement.classList.remove('modal-open');
+    onClose && onClose();
     return true;
   }
   function close() {
     if (!cleanup()) return;
     // убрать нашу запись из истории, если мы всё ещё на ней
-    if (history.state && history.state.modal === id) { skipPop++; history.back(); }
+    if (history.state && history.state.modal === id) { skipPop++; history.back(); setTimeout(() => { if (skipPop && afterBack) { const f = afterBack; afterBack = null; skipPop = 0; f(); } }, 600); }
   }
   mstack.push({ id, fromPop: cleanup });
+  document.documentElement.classList.add('modal-open'); // страница под шторкой не прокручивается
   try { history.pushState({ modal: id }, ''); } catch { /* ignore */ }
   back.addEventListener('mousedown', (e) => { if (e.target === back) close(); });
   document.addEventListener('keydown', esc);

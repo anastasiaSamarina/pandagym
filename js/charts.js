@@ -1,8 +1,9 @@
+import { icon } from './icons.js';
 // Простые SVG-графики без библиотек. Цвета берутся из CSS-переменных (см. css/app.css).
 import { svg, h, parseISO, fmtShort, fmtNum, toast } from './util.js';
 import { sendCanvas } from './share.js';
 
-const W = 640, H = 240, PAD = { l: 44, r: 14, t: 14, b: 28 };
+const W = 640, H = 280, PAD = { l: 58, r: 16, t: 16, b: 40 };
 
 function niceTicks(min, max, n = 4) {
   if (min === max) { min -= 1; max += 1; }
@@ -30,13 +31,13 @@ export function lineChart(series, { unit = '' } = {}) {
   const root = svg('svg', { viewBox: `0 0 ${W} ${H}`, class: 'chart', role: 'img', preserveAspectRatio: 'xMidYMid meet' });
   ticks.forEach((t) => {
     root.append(svg('line', { x1: PAD.l, x2: W - PAD.r, y1: sy(t), y2: sy(t), class: 'grid' }));
-    root.append(svg('text', { x: PAD.l - 6, y: sy(t) + 4, class: 'axis', 'text-anchor': 'end' }, fmtNum(t)));
+    root.append(svg('text', { x: PAD.l - 8, y: sy(t) + 6, class: 'axis', 'text-anchor': 'end' }, fmtNum(t)));
   });
   const nx = Math.min(5, new Set(xs).size);
   for (let i = 0; i < nx; i++) {
     const t = nx === 1 ? xs[0] : x0 + ((x1 - x0) * i) / (nx - 1);
     const d = new Date(t);
-    root.append(svg('text', { x: sx(t), y: H - 8, class: 'axis', 'text-anchor': i === 0 ? 'start' : i === nx - 1 ? 'end' : 'middle' },
+    root.append(svg('text', { x: sx(t), y: H - 10, class: 'axis', 'text-anchor': i === 0 ? 'start' : i === nx - 1 ? 'end' : 'middle' },
       fmtShort(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`)));
   }
   series.forEach((s) => {
@@ -49,7 +50,7 @@ export function lineChart(series, { unit = '' } = {}) {
 }
 
 /** Столбики: items [{label, value, tip}] */
-export function barChart(items, { goal = null, maxLabels = 8 } = {}) {
+export function barChart(items, { goal = null, maxLabels = 5 } = {}) {
   if (!items.length) return h('div', { class: 'empty small' }, 'Нет данных');
   const max = Math.max(...items.map((i) => i.value), goal || 0, 1);
   const ticks = niceTicks(0, max, 4), top = ticks[ticks.length - 1];
@@ -57,7 +58,7 @@ export function barChart(items, { goal = null, maxLabels = 8 } = {}) {
   const sy = (v) => H - PAD.b - (v / top) * (H - PAD.t - PAD.b);
   ticks.forEach((t) => {
     root.append(svg('line', { x1: PAD.l, x2: W - PAD.r, y1: sy(t), y2: sy(t), class: 'grid' }));
-    root.append(svg('text', { x: PAD.l - 6, y: sy(t) + 4, class: 'axis', 'text-anchor': 'end' }, fmtNum(t)));
+    root.append(svg('text', { x: PAD.l - 8, y: sy(t) + 6, class: 'axis', 'text-anchor': 'end' }, fmtNum(t)));
   });
   const bw = (W - PAD.l - PAD.r) / items.length;
   const every = Math.ceil(items.length / maxLabels);
@@ -65,7 +66,7 @@ export function barChart(items, { goal = null, maxLabels = 8 } = {}) {
     const x = PAD.l + i * bw + bw * 0.15, w = bw * 0.7;
     const met = goal !== null && it.value >= goal;
     root.append(svg('rect', { x, y: sy(it.value), width: w, height: H - PAD.b - sy(it.value), rx: 3, class: 'bar' + (met ? ' met' : '') }, svg('title', {}, it.tip || `${it.label}: ${fmtNum(it.value)}`)));
-    if (i % every === 0) root.append(svg('text', { x: x + w / 2, y: H - 8, class: 'axis', 'text-anchor': 'middle' }, it.label));
+    if (i % every === 0) root.append(svg('text', { x: x + w / 2, y: H - 10, class: 'axis', 'text-anchor': 'middle' }, it.label));
   });
   if (goal !== null) root.append(svg('line', { x1: PAD.l, x2: W - PAD.r, y1: sy(goal), y2: sy(goal), class: 'goal' }));
   return root;
@@ -97,7 +98,7 @@ const FONT = '-apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-s
 
 /** Кнопка «📋» рядом с графиком. container — элемент, внутри которого лежит график (ищется в момент нажатия). */
 export function copyBtn(container, opts) {
-  return h('button', { class: 'btn small', title: 'Скопировать график картинкой', 'aria-label': 'Скопировать график', onclick: () => copyChart(typeof container === 'function' ? container() : container, typeof opts === 'function' ? opts() : opts) }, '📋 Картинка');
+  return h('button', { class: 'btn small icon-only', title: 'Поделиться графиком картинкой', 'aria-label': 'Поделиться графиком', onclick: () => copyChart(typeof container === 'function' ? container() : container, typeof opts === 'function' ? opts() : opts) }, icon('share'));
 }
 
 /** Рисуем график на белом фоне со светлыми цветами (не зависит от тёмной темы приложения) */
@@ -113,7 +114,7 @@ export async function copyChart(container, { title = '', legend = [] } = {}) {
   el.querySelectorAll('*').forEach((n) => {
     const cl = n.getAttribute('class') || '';
     if (cl.includes('grid')) set(n, { stroke: IMG.line, 'stroke-width': 1 });
-    else if (cl.includes('axis')) set(n, { fill: IMG.muted, 'font-size': 11 });
+    else if (cl.includes('axis')) set(n, { fill: IMG.muted, 'font-size': 21 });
     else if (cl.includes('goal')) set(n, { stroke: IMG.muted, 'stroke-dasharray': '4 4', 'stroke-width': 1 });
     else if (cl.includes('bar')) set(n, { fill: cl.includes('met') ? IMG.good : IMG.accent, 'fill-opacity': 0.85 });
     else if (cl.includes('line')) set(n, { fill: 'none', stroke: cl.includes('s2') ? IMG.orange : IMG.accent, 'stroke-width': 2.5, 'stroke-linejoin': 'round' });
@@ -141,4 +142,35 @@ export async function copyChart(container, { title = '', legend = [] } = {}) {
   ctx.fillStyle = IMG.muted; ctx.font = `12px ${FONT}`;
   ctx.fillText(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`, pad, ch - 10);
   await sendCanvas(cv, `grafik-${(title || 'chart').replace(/[^\wа-яё]+/gi, '-').slice(0, 40)}.png`, 'График скопирован — вставь в чат');
+}
+
+/** Таблица картинкой: columns — заголовки, rows — массивы строк (текст). Белый фон, не зависит от темы приложения. */
+export async function copyTable({ title = '', columns, rows, note = '' }) {
+  if (!rows.length) { toast('Нет данных для картинки'); return; }
+  const scale = 2, pad = 24, rowH = 44, headH = 52, top = title ? 64 : 24;
+  const first = 150, other = 120, cw = pad * 2 + first + other * (columns.length - 1);
+  const ch = top + headH + rows.length * rowH + (note ? 40 : 28) + 12;
+  const cv = document.createElement('canvas'); cv.width = cw * scale; cv.height = ch * scale;
+  const c = cv.getContext('2d'); c.scale(scale, scale);
+  c.fillStyle = '#ffffff'; c.fillRect(0, 0, cw, ch); c.fillStyle = IMG.accent; c.fillRect(0, 0, cw, 5);
+  if (title) { c.fillStyle = IMG.text; c.font = `700 22px ${FONT}`; c.textAlign = 'left'; c.fillText(title, pad, 42); }
+  c.fillStyle = '#f3f4f6'; c.fillRect(pad, top, cw - pad * 2, headH);
+  const xAt = (i) => (i === 0 ? pad + 8 : pad + first + other * (i - 1) + other / 2);
+  columns.forEach((t, i) => {
+    c.fillStyle = IMG.muted; c.font = `600 16px ${FONT}`; c.textAlign = i === 0 ? 'left' : 'center';
+    const [a, b] = String(t).split('\n'); c.fillText(a, xAt(i), top + (b ? 22 : 31)); if (b) { c.font = `14px ${FONT}`; c.fillText(b, xAt(i), top + 42); }
+  });
+  rows.forEach((r, k) => {
+    const y = top + headH + k * rowH;
+    if (k) { c.fillStyle = IMG.line; c.fillRect(pad, y, cw - pad * 2, 1); }
+    r.forEach((v, i) => {
+      const [main, delta] = String(v).split('\n');
+      c.textAlign = i === 0 ? 'left' : 'center'; c.fillStyle = IMG.text; c.font = `${i === 0 ? 600 : 500} 20px ${FONT}`;
+      c.fillText(main, xAt(i), y + (delta ? 26 : 29));
+      if (delta) { c.fillStyle = IMG.muted; c.font = `13px ${FONT}`; c.fillText(delta, xAt(i), y + 40); }
+    });
+  });
+  c.textAlign = 'left'; c.fillStyle = IMG.muted; c.font = `13px ${FONT}`;
+  c.fillText(note || new Date().toISOString().slice(0, 10), pad, ch - 14);
+  await sendCanvas(cv, `${(title || 'table').replace(/[^\wа-яё]+/gi, '-').slice(0, 40)}.png`, 'Таблица скопирована — вставь в чат');
 }

@@ -212,6 +212,17 @@ export function plateau(hist, meta, N = 4, pct = 3) {
   return { since: last[0].w.date, sessions: N, weight: bestW };
 }
 
+/**
+ * Плато упражнения для Аналитики: упражнение делали минимум в двух циклах (разовые не считаем),
+ * а в последних N занятиях не вырос ни вес, ни объём.
+ */
+export function plateauFor(db, name, hist = historyOf(db, name)) {
+  const cycles = new Set(hist.map((e) => e.w.cycle));
+  if (cycles.size < 2) return null;
+  const r = plateau(hist, exMeta(db, name), ...plateauCfg(db));
+  return r ? { ...r, cycles: cycles.size, total: hist.length, last: hist[hist.length - 1].w.date } : null;
+}
+
 // ---------- недели и календарь ----------
 /** Уникальные даты тренировок */
 export const workoutDates = (db) => [...new Set(db.workouts.map((w) => w.date).filter(isISO))].sort();

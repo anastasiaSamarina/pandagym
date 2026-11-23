@@ -1,5 +1,6 @@
 // Экран тренировки: ввод, редактирование, сравнение с прошлым разом (зелёный/красный).
-import { h, refresh, toast, modal, confirmBox, fmtDate, fmtNum, parseInput, todayISO, uid, nowISO, isISO, plural, WD, weekdayIdx } from './util.js';
+import { icon } from './icons.js';
+import { goto, h, refresh, toast, modal, confirmBox, fmtDate, fmtNum, parseInput, todayISO, uid, nowISO, isISO, plural, WD, weekdayIdx } from './util.js';
 import { state, touch, markChanged, deleteWorkout, putMedia } from './store.js';
 import { compareItem, exMeta, ensureExercise, findExercise, historyOf, setsLine, filledSets, nameKey, similarTo, wName, fieldsOf, tempoText, normName } from './model.js';
 import { shareWorkout } from './share.js';
@@ -79,8 +80,8 @@ function addDialog(w, rerender, replaceIt = null) {
     close = c;
     return h('div', {}, h('h3', {}, replaceIt ? 'Заменить упражнение' : 'Добавить упражнение'),
       replaceIt ? null : h('div', { class: 'row' },
-        h('button', { class: 'btn', onclick: () => { w.items.push({ type: 'free', title: '', text: '', media: [] }); touch(w); c(); rerender(); } }, '＋ Свободный блок'),
-        h('button', { class: 'btn', onclick: () => { w.items.push({ type: 'interval', title: 'Табата', format: 'Табата', work: 20, rest: 10, rounds: 8, moves: '', text: '', result: '', media: [] }); touch(w); c(); rerender(); } }, '⏱ Табата')),
+        h('button', { class: 'btn', onclick: () => { w.items.push({ type: 'free', title: '', text: '', media: [] }); touch(w); c(); rerender(); } }, icon('plus'), 'Свободный блок'),
+        h('button', { class: 'btn', onclick: () => { w.items.push({ type: 'interval', title: 'Табата', format: 'Табата', work: 20, rest: 10, rounds: 8, moves: '', text: '', result: '', media: [] }); touch(w); c(); rerender(); } }, icon('timer'), 'Табата')),
       search, list);
   });
   paint(); setTimeout(() => search.focus(), 50);
@@ -129,15 +130,15 @@ function setsCard(w, it, ctx) {
     return [
       h('tr', {}, h('td', { class: 'n' }, i + 1), weighted ? h('td', {}, wIn) : null, F.r ? h('td', {}, rIn) : null,
         h('td', { class: 'acts' },
-          h('button', { class: 'ico' + (s.note ? ' on' : ''), title: 'Комментарий', onclick: () => { noteRow.hidden = !noteRow.hidden; if (!noteRow.hidden) noteIn.focus(); } }, '💬'),
-          h('button', { class: 'ico', title: 'Удалить круг', onclick: () => { if (it.sets.length > 1) { it.sets.splice(i, 1); touch(w); ctx.rerender(); } } }, '✕'))),
+          h('button', { class: 'ico' + (s.note ? ' on' : ''), title: 'Комментарий к подходу', 'aria-label': 'Комментарий к подходу', onclick: () => { noteRow.hidden = !noteRow.hidden; if (!noteRow.hidden) noteIn.focus(); } }, icon('comment')),
+          h('button', { class: 'ico', title: 'Удалить подход', 'aria-label': 'Удалить подход', onclick: () => { if (it.sets.length > 1) { it.sets.splice(i, 1); touch(w); ctx.rerender(); } } }, icon('x')))),
       noteRow];
   }
   it.sets.forEach((s, i) => tbody.append(...buildRow(s, i)));
 
   const prevLine = prev ? h('div', { class: 'prev' }, `${prev.label || 'Прошлый раз'} · ${fmtDate(prev.w.date, false)}: `, h('span', {}, setsLine(prev.it.sets)), prev.it.tempo && tempoText(prev.it) ? ` · темп ${tempoText(prev.it)}` : '') : null;
   const unit = meta.unit === 'sec' ? 'Сек' : 'Повт';
-  const star = h('button', { class: 'ico star', title: 'В избранное (следить в Аналитике)', onclick: (ev) => { const e = ensureExercise(db, it.exercise); e.fav = !e.fav; markChanged(); ev.target.textContent = e.fav ? '★' : '☆'; } }, meta.fav ? '★' : '☆');
+  const star = h('button', { class: 'ico star' + (meta.fav ? ' on' : ''), title: 'В избранное', 'aria-label': 'В избранное', onclick: (ev) => { const e = ensureExercise(db, it.exercise); e.fav = !e.fav; markChanged(); star.replaceChildren(icon(e.fav ? 'star' : 'starO')); star.classList.toggle('on', e.fav); } }, icon(meta.fav ? 'star' : 'starO'));
   // темп: 4 числа — подъём, пауза вверху, опускание, пауза внизу
   const tempoLabels = ['Вверх, с', 'Пауза, с', 'Вниз, с', 'Пауза, с'];
   const tempoRow = F.t ? h('div', { class: 'tempo' }, h('small', { class: 'muted' }, 'Темп'),
@@ -147,27 +148,33 @@ function setsCard(w, it, ctx) {
   const restSec = Number(db.settings.restSec) || 60;
   const card = h('article', { class: 'card ex' },
     h('header', { class: 'ex-head' },
-      h('div', { class: 'ex-title' }, h('a', { class: 'ex-name', href: '#/analytics/' + encodeURIComponent(it.exercise) }, it.exercise),
-        h('button', { class: 'ico', title: 'Изменить название', 'aria-label': 'Изменить название', onclick: () => renameDialog(w, it, ctx) }, '✎'), star),
-      h('div', { class: 'ex-tools' },
-        h('button', { class: 'ico', title: 'Выше', onclick: () => ctx.move(it, -1) }, '↑'),
-        h('button', { class: 'ico', title: 'Ниже', onclick: () => ctx.move(it, 1) }, '↓'),
-        h('button', { class: 'ico', title: 'Заменить упражнение', 'aria-label': 'Заменить упражнение', onclick: () => addDialog(w, ctx.rerender, it) }, '🔁'),
-        h('button', { class: 'ico del', title: 'Удалить упражнение', 'aria-label': 'Удалить упражнение', onclick: () => ctx.remove(it) }, '🗑'))),
+      h('button', { class: 'ex-name-btn', title: 'Изменить название', onclick: () => renameDialog(w, it, ctx) }, it.exercise),
+      star,
+      h('button', { class: 'ico', title: 'Выше', 'aria-label': 'Выше', disabled: w.items.indexOf(it) === 0, onclick: () => ctx.move(it, -1) }, icon('up')),
+      h('button', { class: 'ico', title: 'Ниже', 'aria-label': 'Ниже', disabled: w.items.indexOf(it) === w.items.length - 1, onclick: () => ctx.move(it, 1) }, icon('down')),
+      h('button', { class: 'ico', title: 'Ещё', 'aria-label': 'Ещё', onclick: () => exMenu(w, it, ctx) }, icon('dots'))),
     chip, prevLine, tempoRow,
     h('table', { class: 'sets' },
-      h('thead', {}, h('tr', {}, h('th', {}, 'Круг'), weighted ? h('th', {}, 'Вес, кг') : null, F.r ? h('th', {}, unit) : null, h('th', {}))),
+      h('thead', {}, h('tr', {}, h('th', {}, '№'), weighted ? h('th', {}, 'Вес, кг') : null, F.r ? h('th', {}, unit) : null, h('th', {}))),
       tbody),
-    h('div', { class: 'tools' },
-      h('button', { class: 'btn small', onclick: () => { const l = it.sets[it.sets.length - 1] || {}; it.sets.push({ w: l.w ?? null, r: l.r ?? null, note: '' }); touch(w); ctx.rerender(); } }, '＋ круг'),
-      h('button', { class: 'btn small', title: 'Таймер отдыха (время меняется в Настройках)', onclick: () => startRest(restSec) }, `⏱ Отдых ${restSec} с`),
-      ...mediaButtons(it, w, ctx.rerender),
-      h('button', { class: 'btn small', title: 'Что вводить в этом упражнении', onclick: () => fieldsDialog(w, it, ctx) }, '⚙ Поля')),
-    h('input', { class: 'note-in', placeholder: 'Комментарий к упражнению', value: it.note || '', oninput: (e) => { it.note = e.target.value; touch(w); } }),
+    h('div', { class: 'tools-row' },
+      h('button', { class: 'btn small grow', onclick: () => { const l = it.sets[it.sets.length - 1] || {}; it.sets.push({ w: l.w ?? null, r: l.r ?? null, note: '' }); touch(w); ctx.rerender(); } }, icon('plus'), 'Подход'),
+      ...mediaButtons(it, w, ctx.rerender)),
+    h('button', { class: 'btn rest-big', title: 'Время отдыха меняется в Настройках', onclick: () => startRest(restSec) }, icon('timer'), `Отдых ${restSec} с`),
+    it.note ? h('input', { class: 'note-in', placeholder: 'Комментарий к упражнению', value: it.note || '', oninput: (e) => { it.note = e.target.value; touch(w); } }) : null,
     linkStrip(it, w, ctx.rerender),
     mediaStrip(it, w, ctx.rerender));
   paint();
   return card;
+}
+
+/** Меню «⋯» у упражнения: настройка полей и удаление */
+function exMenu(w, it, ctx) {
+  modal((close) => h('div', {}, h('h3', {}, it.exercise),
+    h('div', { class: 'col' },
+      h('button', { class: 'btn', onclick: () => { close(); fieldsDialog(w, it, ctx); } }, icon('sliders'), 'Редактировать упражнение (поля)'),
+      h('button', { class: 'btn danger', onclick: () => { close(); ctx.remove(it); } }, icon('trash'), 'Удалить упражнение'),
+      h('button', { class: 'btn', onclick: close }, 'Закрыть'))));
 }
 
 /** Переименовать упражнение в этой тренировке (или сразу везде) */
@@ -210,7 +217,7 @@ function fieldsDialog(w, it, ctx) {
 function freeCard(w, it, ctx) {
   return h('article', { class: 'card ex' },
     h('header', { class: 'ex-head' }, h('input', { class: 'title-in', placeholder: 'Название блока', value: it.title || '', oninput: (e) => { it.title = e.target.value; touch(w); } }),
-      h('div', { class: 'ex-tools' }, h('button', { class: 'ico', onclick: () => ctx.move(it, -1) }, '↑'), h('button', { class: 'ico', onclick: () => ctx.move(it, 1) }, '↓'), h('button', { class: 'ico del', title: 'Удалить блок', 'aria-label': 'Удалить блок', onclick: () => ctx.remove(it) }, '🗑'))),
+      h('div', { class: 'ex-tools' }, h('button', { class: 'ico', onclick: () => ctx.move(it, -1) }, '↑'), h('button', { class: 'ico', onclick: () => ctx.move(it, 1) }, '↓'), h('button', { class: 'ico del', title: 'Удалить блок', 'aria-label': 'Удалить блок', onclick: () => ctx.remove(it) }, icon('trash')))),
     h('textarea', { class: 'area', rows: 4, placeholder: 'Любой текст: что делали, сообщение от тренера…', oninput: (e) => { it.text = e.target.value; touch(w); } }, it.text || ''),
     h('div', { class: 'tools' }, ...mediaButtons(it, w, ctx.rerender)),
     linkStrip(it, w, ctx.rerender),
@@ -252,11 +259,11 @@ function intervalCard(w, it, ctx) {
   };
   return h('article', { class: 'card ex interval tabata' },
     h('header', { class: 'ex-head' }, h('input', { class: 'title-in', placeholder: 'Название', value: it.title || '', oninput: (e) => { it.title = e.target.value; touch(w); } }),
-      h('div', { class: 'ex-tools' }, h('button', { class: 'ico', title: 'Выше', onclick: () => ctx.move(it, -1) }, '↑'), h('button', { class: 'ico', title: 'Ниже', onclick: () => ctx.move(it, 1) }, '↓'),
-        h('button', { class: 'ico del', title: 'Удалить блок', 'aria-label': 'Удалить блок', onclick: () => ctx.remove(it) }, '🗑'))),
+      h('div', { class: 'ex-tools' }, h('button', { class: 'ico', title: 'Выше', 'aria-label': 'Выше', disabled: w.items.indexOf(it) === 0, onclick: () => ctx.move(it, -1) }, icon('up')), h('button', { class: 'ico', title: 'Ниже', 'aria-label': 'Ниже', disabled: w.items.indexOf(it) === w.items.length - 1, onclick: () => ctx.move(it, 1) }, icon('down')),
+        h('button', { class: 'ico del', title: 'Удалить блок', 'aria-label': 'Удалить блок', onclick: () => ctx.remove(it) }, icon('trash')))),
     h('div', { class: 'chips' }, chip(it.format || 'Табата'), chip(`${it.work || 0} с работа`), chip(`${it.rest || 0} с отдых`), chip(`${it.rounds || 0} ${plural(it.rounds || 0, ['раунд', 'раунда', 'раундов'])}`), total ? chip(fmtT(total)) : null,
-      h('button', { class: 'ico', title: 'Настроить', 'aria-label': 'Настроить', onclick: () => tabataDialog(w, it, ctx) }, '✎')),
-    moves.length ? h('ol', { class: 'tb-moves' }, moves.map((m) => h('li', {}, m))) : h('button', { class: 'btn small', onclick: () => tabataDialog(w, it, ctx) }, '＋ Добавить движения'),
+      h('button', { class: 'ico', title: 'Настроить', 'aria-label': 'Настроить', onclick: () => tabataDialog(w, it, ctx) }, icon('edit'))),
+    moves.length ? h('ol', { class: 'tb-moves' }, moves.map((m) => h('li', {}, m))) : h('button', { class: 'btn small', onclick: () => tabataDialog(w, it, ctx) }, icon('plus'), 'Добавить движения'),
     it.work && it.rounds ? h('button', { class: 'btn primary tb-start', onclick: () => openTimer({ title: it.title || it.format, work: it.work, rest: it.rest || 0, rounds: it.rounds, moves }) }, `▶ Старт таймера · ${fmtT(total)}`) : null,
     row('Результат', it.result, !!it.result, h('input', { class: 'note-in', placeholder: 'Сколько сделала, как зашло', value: it.result || '', oninput: (e) => { it.result = e.target.value; touch(w); } })),
     row('Описание от тренера', it.text ? it.text.split('\n')[0].slice(0, 30) : '', !!it.text, h('textarea', { class: 'area', rows: 3, oninput: (e) => { it.text = e.target.value; touch(w); } }, it.text || '')),
@@ -270,7 +277,7 @@ function copyDialog(w) {
   const date = h('input', { type: 'date', value: todayISO(), class: 'date-in' });
   modal((close) => h('div', {}, h('h3', {}, 'Скопировать тренировку'), h('p', { class: 'muted' }, `${wName(w)} · ${fmtDate(w.date)} → на дату:`), date,
     h('div', { class: 'row end' }, h('button', { class: 'btn', onclick: close }, 'Отмена'),
-      h('button', { class: 'btn primary', onclick: () => { if (!isISO(date.value)) return; const n = createWorkout({ date: date.value, from: w }); close(); location.hash = '#/w/' + n.id; } }, 'Скопировать'))));
+      h('button', { class: 'btn primary', onclick: () => { if (!isISO(date.value)) return; const n = createWorkout({ date: date.value, from: w }); close(); goto('#/w/' + n.id); } }, 'Скопировать'))));
 }
 
 // ---------- сам экран ----------
@@ -296,11 +303,11 @@ export function workoutView(id) {
     } });
     const dateIn = h('input', { type: 'date', class: 'date-in', value: isISO(w.date) ? w.date : '', onchange: (e) => { if (isISO(e.target.value)) { w.date = e.target.value; touch(w); ctx.rerender(); } } });
     const head = h('section', { class: 'card wk-head' },
-      h('a', { class: 'back', href: '#/', 'aria-label': 'Назад', title: 'Назад' }, '←'),
+      h('a', { class: 'back', href: '#/', 'aria-label': 'Назад', title: 'Назад' }, icon('back')),
       h('div', { class: 'row wrap actions' },
-        h('button', { class: 'btn small primary', title: 'Картинка с подсветкой — в буфер обмена', onclick: () => shareWorkout(w) }, '📋 Поделиться'),
-        h('span', { class: 'copy-wrap' }, h('button', { class: 'btn small', title: 'Скопировать тренировку на другую дату', onclick: () => { try { copyDate.showPicker(); } catch { copyDate.click(); } } }, '⧉ Копия'), copyDate),
-        h('button', { class: 'btn small danger', title: 'Удалить тренировку', 'aria-label': 'Удалить', onclick: removeWorkout }, '🗑')),
+        h('button', { class: 'btn small primary icon-only', title: 'Поделиться картинкой', 'aria-label': 'Поделиться', onclick: () => shareWorkout(w) }, icon('share')),
+        h('span', { class: 'copy-wrap' }, h('button', { class: 'btn small', title: 'Скопировать тренировку на другую дату', onclick: () => { try { copyDate.showPicker(); } catch { copyDate.click(); } } }, icon('copy'), 'Копия'), copyDate),
+        h('button', { class: 'btn small danger', title: 'Удалить тренировку', 'aria-label': 'Удалить', onclick: removeWorkout }, icon('trash'))),
       h('label', { class: 'fld' }, h('span', {}, 'Название'),
         h('input', { class: 'title-in', placeholder: `Тренировка ${w.date}`, value: (w.day && w.day.length <= 2) ? `День ${w.day}` : w.day || '', oninput: (e) => { w.day = e.target.value; touch(w); } })),
       h('div', { class: 'row wrap' }, dateIn, h('span', { class: 'muted' }, isISO(w.date) ? WD[weekdayIdx(w.date)] : 'без даты'),
@@ -310,7 +317,7 @@ export function workoutView(id) {
 
     const cards = w.items.map((it) => (it.type === 'sets' ? setsCard(w, it, ctx) : it.type === 'interval' ? intervalCard(w, it, ctx) : freeCard(w, it, ctx)));
     root.replaceChildren(head, ...cards,
-      h('button', { class: 'btn add', onclick: () => addDialog(w, ctx.rerender) }, '＋ Добавить упражнение'),
+      h('button', { class: 'btn add', onclick: () => addDialog(w, ctx.rerender) }, icon('plus'), 'Добавить упражнение'),
       h('section', { class: 'card' }, h('textarea', { class: 'area', rows: 2, placeholder: 'Заметка о тренировке (самочувствие, как прошла)', oninput: (e) => { w.note = e.target.value; touch(w); } }, w.note || '')));
   }
 
