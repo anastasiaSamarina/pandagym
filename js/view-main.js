@@ -1,7 +1,10 @@
+import { icon } from './icons.js';
 // Основные экраны: журнал (с календарём), аналитика, замеры.
-import { h, put, refresh, toast, modal, fmtDate, fmtNum, fmtShort, parseInput, todayISO, isISO, addDays, weekStart, weekdayIdx, parseISO, daysBetween, WD, MONTHS_NOM, isoDate, pad } from './util.js';
+import { confirmBox } from './util.js';
+import { copyTable } from './charts.js';
+import { goto, plural, h, put, refresh, toast, modal, fmtDate, fmtNum, fmtShort, parseInput, todayISO, isISO, addDays, weekStart, weekdayIdx, parseISO, daysBetween, WD, MONTHS_NOM, isoDate, pad } from './util.js';
 import { state, markChanged } from './store.js';
-import { filledSets, exMeta, ensureExercise, findExercise, historyOf, setStats, plateau, plateauCfg, weekCounts, weekStreak, compareItem, COMPARE_MODES, workoutDates, setsLine, nameKey, num, similarExercises, wName, dayBadge } from './model.js';
+import { filledSets, exMeta, ensureExercise, findExercise, historyOf, setStats, plateau, plateauFor, plateauCfg, weekCounts, weekStreak, compareItem, COMPARE_MODES, workoutDates, setsLine, nameKey, num, similarExercises, wName, dayBadge } from './model.js';
 import { createWorkout } from './view-workout.js';
 import { lineChart, barChart, ring, sparkline, copyBtn } from './charts.js';
 import { importDialog, mergeDialog } from './view-settings.js';
@@ -21,7 +24,7 @@ export function newWorkoutDialog(date = todayISO()) {
   const box = h('div', {});
   let showAll = false;
   modal((close) => {
-    const go = (opts) => { if (!isISO(dateIn.value)) { toast('Выбери дату'); return; } const w = createWorkout({ ...opts, date: dateIn.value }); close(); location.hash = '#/w/' + w.id; };
+    const go = (opts) => { if (!isISO(dateIn.value)) { toast('Выбери дату'); return; } const w = createWorkout({ ...opts, date: dateIn.value }); close(); goto('#/w/' + w.id); };
     // подсказки пересчитываются при смене даты: «в понедельник копирую прошлый понедельник»
     const paint = () => {
       const d = isISO(dateIn.value) ? dateIn.value : date;
@@ -64,7 +67,7 @@ function weekCard() {
       h('small', { class: 'muted' }, `Серия недель по плану: ${weekStreak(db, today)}`)));
 }
 
-let calMonth = null;
+let calMonth = null, calAnchor = '';
 export function journalView() {
   const db = state.db;
   const root = h('div', { class: 'page' });
@@ -80,11 +83,22 @@ export function journalView() {
   const today = todayISO();
   if (!calMonth) calMonth = today.slice(0, 7);
   const [y, m] = calMonth.split('-').map(Number);
-  const go = (d) => { const x = new Date(y, m - 1 + d, 1); calMonth = `${x.getFullYear()}-${pad(x.getMonth() + 1)}`; refresh(); };
+  let collapsed = false; try { collapsed = localStorage.getItem('gym.calCollapsed') === '1'; } catch { /* ignore */ }
+  if (!calAnchor || calAnchor.slice(0, 7) !== calMonth) calAnchor = calMonth === today.slice(0, 7) ? today : `${calMonth}-01`;
+  const setMonth = (iso) => { calAnchor = iso; calMonth = iso.slice(0, 7); refresh(); };
+  const go = (d) => {
+    if (collapsed) { setMonth(addDays(calAnchor, d * 7)); return; }
+    const x = new Date(y, m - 1 + d, 1); calMonth = `${x.getFullYear()}-${pad(x.getMonth() + 1)}`; calAnchor = ''; refresh();
+  };
+  const toToday = () => { calMonth = today.slice(0, 7); calAnchor = today; refresh(); window.scrollTo(0, 0); };
+  const toggle = () => { try { localStorage.setItem('gym.calCollapsed', collapsed ? '0' : '1'); } catch { /* ignore */ } refresh(); };
+  const wkStart = weekStart(calAnchor);
+  const yTxt = y === new Date().getFullYear() ? '' : ` ${y}`; // текущий год не пишем
+  const title = collapsed ? weekLabel(wkStart) : `${MONTHS_NOM[m - 1]}${yTxt}`;
   const monthBar = (extra) => h('div', { class: 'row between month-bar' },
-    h('button', { class: 'ico big', 'aria-label': 'Предыдущий месяц', onclick: () => go(-1) }, '‹'),
-    h('b', {}, `${MONTHS_NOM[m - 1]} ${y}`, extra || null),
-    h('button', { class: 'ico big', 'aria-label': 'Следующий месяц', onclick: () => go(1) }, '›'));
+    h('button', { class: 'ico big', 'aria-label': collapsed ? 'Предыдущая неделя' : 'Предыдущий месяц', onclick: () => go(-1) }, icon('back')),
+    h('b', {}, title, extra || null),
+    h('button', { class: 'ico big', 'aria-label': collapsed ? 'Следующая неделя' : 'Следующий месяц', onclick: () => go(1) }, icon('chevright')));
   const cycles = [...new Set(db.workouts.map((w) => w.cycle))];
   const filter = journalView.filter || 'all';
   const sel = h('select', { class: 'sel', value: filter, onchange: (e) => { journalView.filter = e.target.value; refresh(); } },
@@ -94,20 +108,25 @@ export function journalView() {
   const byDate = new Map();
   for (const w of db.workouts) if (isISO(w.date)) { if (!byDate.has(w.date)) byDate.set(w.date, []); byDate.get(w.date).push(w); }
   const cells = [];
-  for (let i = 0; i < offset; i++) cells.push(h('div', { class: 'cal-cell empty' }));
-  for (let d = 1; d <= dim; d++) {
-    const date = `${calMonth}-${pad(d)}`, ws = byDate.get(date) || [];
-    cells.push(h('button', { class: 'cal-cell' + (ws.length ? ' done' : '') + (date === today ? ' today' : ''), onclick: () => { if (ws.length) location.hash = '#/w/' + ws[0].id; else newWorkoutDialog(date); } },
-      h('span', { class: 'cd' }, d), ws.length ? h('span', { class: 'dl' }, ws.map(dayBadge).join(' ')) : null));
+  const mk = (date, d) => { const ws = byDate.get(date) || [];
+    return h('button', { class: 'cal-cell' + (ws.length ? ' done' : '') + (date === today ? ' today' : ''), onclick: () => { if (ws.length) location.hash = '#/w/' + ws[0].id; else newWorkoutDialog(date); } },
+      h('span', { class: 'cd' }, d), ws.length ? h('span', { class: 'dl' }, ws.map(dayBadge).join(' ')) : null); };
+  if (collapsed) for (let i = 0; i < 7; i++) { const date = addDays(wkStart, i); cells.push(mk(date, parseISO(date).getDate())); }
+  else {
+    for (let i = 0; i < offset; i++) cells.push(h('div', { class: 'cal-cell empty' }));
+    for (let d = 1; d <= dim; d++) cells.push(mk(`${calMonth}-${pad(d)}`, d));
   }
   const monthDays = [...byDate.keys()].filter((d) => d.startsWith(calMonth)).length;
-  put(root, h('div', { class: 'row between' }, h('h1', {}, 'Журнал'), h('button', { class: 'btn primary', onclick: () => newWorkoutDialog() }, '＋ Тренировка')),
+  put(root, h('div', { class: 'row between' }, h('h1', {}, 'Журнал'), h('button', { class: 'btn primary', onclick: () => newWorkoutDialog() }, icon('plus'), 'Тренировка')),
     h('section', { class: 'card' }, monthBar(),
+      h('div', { class: 'row between cal-tools' },
+        h('button', { class: 'btn small', onclick: toToday }, icon('target'), 'Сегодня'),
+        h('button', { class: 'btn small', onclick: toggle, 'aria-expanded': String(!collapsed) }, icon(collapsed ? 'chevdown' : 'chevup'), collapsed ? 'Весь месяц' : 'Свернуть до недели')),
       h('div', { class: 'cal-head' }, WD.map((x) => h('span', {}, x))),
       h('div', { class: 'cal' }, cells),
-      h('small', { class: 'muted' }, `Тренировок в этом месяце: ${monthDays}. Нажми на пустой день, чтобы добавить.`)),
+      collapsed ? null : h('small', { class: 'muted' }, `Тренировок в этом месяце: ${monthDays}. Нажми на пустой день, чтобы добавить.`)),
     weekCard(),
-    h('section', { class: 'card month-card' }, monthBar(), cycles.length > 1 ? h('div', { class: 'row' }, sel) : null));
+    h('section', { class: 'card month-card' }, h('b', {}, `${MONTHS_NOM[m - 1]}${yTxt}`), cycles.length > 1 ? h('div', { class: 'row' }, sel) : null));
   const list = [...db.workouts].filter((w) => (filter === 'all' || w.cycle === filter) && isISO(w.date) && w.date.startsWith(calMonth)).sort(byDateDesc);
   if (!list.length) put(root, h('div', { class: 'empty small' }, 'В этом месяце тренировок нет'));
   for (const w of list) {
@@ -134,7 +153,7 @@ const exPeriod = newPeriod();
 // ======================= аналитика =======================
 function exerciseList(onPick, limit = 200, opts = {}) {
   const db = state.db;
-  const input = h('input', { class: 'search', placeholder: '🔍 Найти упражнение: делала ли я это раньше?', autocomplete: 'off' });
+  const input = h('input', { class: 'search', placeholder: 'Найти упражнение: делала ли я это раньше?', autocomplete: 'off' });
   const list = h('div', { class: 'pick-list' });
   const paint = () => {
     const q = nameKey(input.value);
@@ -144,7 +163,7 @@ function exerciseList(onPick, limit = 200, opts = {}) {
       .map((e) => ({ e, hist: historyOf(db, e.name) }))
       .sort((a, b) => ((b.hist.at(-1) || { w: { date: '' } }).w.date).localeCompare((a.hist.at(-1) || { w: { date: '' } }).w.date)).slice(0, limit);
     list.replaceChildren(...(rows.length ? rows.map(({ e, hist }) => {
-      const last = hist.at(-1), pl = plateau(hist, exMeta(db, e.name), ...plateauCfg(db));
+      const last = hist.at(-1), pl = plateauFor(db, e.name, hist);
       return h('button', { class: 'pick', onclick: () => onPick(e.name) },
         h('b', {}, e.fav ? '★ ' : '', e.name, pl ? h('span', { class: 'chip worse' }, 'плато') : null),
         h('small', {}, last ? `${hist.length} раз · последний ${fmtDate(last.w.date)}: ${setsLine(last.it.sets)}` : 'Пока не выполнялось'));
@@ -205,7 +224,7 @@ function heatView() {
       h('div', { class: 'hm-grid', style: `grid-template-columns:repeat(${cols},14px)` }, cells))));
   setTimeout(() => { if (y === new Date().getFullYear()) scroller.scrollLeft = scroller.scrollWidth; }, 0);
   return h('section', { class: 'card' },
-    h('div', { class: 'row between wrap' }, h('h3', {}, 'Календарь тренировок'),
+    h('div', { class: 'row between wrap' }, h('h3', {}, 'Тепловая карта тренировок'),
       h('div', { class: 'row' }, h('button', { class: 'ico', 'aria-label': 'Предыдущий год', onclick: () => { heatYear--; refresh(); } }, '‹'), h('b', {}, y),
         h('button', { class: 'ico', 'aria-label': 'Следующий год', onclick: () => { heatYear++; refresh(); } }, '›'))),
     scroller,
@@ -221,7 +240,7 @@ let commentQ = '';
 function commentsView() {
   const db = state.db;
   const out = h('div', {});
-  const input = h('input', { class: 'search', placeholder: '🔍 Искать по комментариям и заметкам…', value: commentQ, autocomplete: 'off', 'aria-label': 'Поиск по комментариям' });
+  const input = h('input', { class: 'search', placeholder: 'Искать по комментариям и заметкам…', value: commentQ, autocomplete: 'off', 'aria-label': 'Поиск по комментариям' });
   const hl = (text, q) => {
     const i = text.toLowerCase().indexOf(q); if (i < 0) return text;
     return [text.slice(0, i), h('mark', {}, text.slice(i, i + q.length)), text.slice(i + q.length)];
@@ -282,15 +301,15 @@ export function analyticsView(name) {
   const root = h('div', { class: 'page' });
   if (!name) {
     const favs = db.exercises.filter((e) => e.fav && historyOf(db, e.name).length >= 0);
-    const plateaus = db.exercises.map((e) => ({ e, hist: historyOf(db, e.name) })).map((x) => ({ ...x, pl: plateau(x.hist, exMeta(db, x.e.name), ...plateauCfg(db)) })).filter((x) => x.pl)
+    const plateaus = db.exercises.map((e) => ({ e, hist: historyOf(db, e.name) })).map((x) => ({ ...x, pl: plateauFor(db, x.e.name, x.hist) })).filter((x) => x.pl)
       .sort((a, b) => (a.pl.since < b.pl.since ? -1 : 1));
     const tab = analyticsView.tab || (favs.length ? 'fav' : 'all');
-    const pill = (k, label) => h('button', { class: 'pill' + (tab === k ? ' on' : ''), onclick: () => { analyticsView.tab = k; refresh(); } }, label);
+    const pill = (k, label) => h('button', { class: 'pill' + (tab === k ? ' on' : ''), onclick: () => { analyticsView.tab = k; refresh(); } }, ...[].concat(label));
     const body = h('div', {});
     put(root, h('h1', {}, 'Аналитика'),
       exerciseList((n) => { location.hash = '#/analytics/' + encodeURIComponent(n); }, 200, { top: true, onQuery: (q) => { body.hidden = !!q; } }),
       body);
-    put(body, h('div', { class: 'row wrap' }, pill('fav', `★ Избранное (${favs.length})`), pill('plateau', `Плато (${plateaus.length})`), pill('all', 'Все упражнения'), pill('heat', '🗓 Календарь'), pill('comments', '💬 Комментарии')));
+    put(body, h('div', { class: 'row wrap' }, pill('fav', 'Избранное'), pill('plateau', 'Плато'), pill('all', 'Все упражнения'), pill('heat', [icon('cal'), 'Тепловая карта']), pill('comments', [icon('comment'), 'Комментарии'])));
     if (tab === 'fav') {
       put(body, favs.length ? favs.map(favCard) : h('section', { class: 'card empty' }, 'Здесь будут упражнения, за которыми ты хочешь следить. Нажми ☆ рядом с названием — в тренировке или на странице упражнения.'));
     } else if (tab === 'heat') {
@@ -298,10 +317,14 @@ export function analyticsView(name) {
     } else if (tab === 'comments') {
       put(body, commentsView());
     } else if (tab === 'plateau') {
-      put(body, h('p', { class: 'muted small' }, `Плато — когда в последних ${plateauCfg(db)[0]} выполнениях упражнения не вырос ни вес, ни общий объём (больше чем на ${plateauCfg(db)[1]}%). Это не ошибка: иногда так и задумано тренером. Менять правило можно в Настройках.`),
-        plateaus.length ? plateaus.map(({ e, pl, hist }) => h('a', { class: 'card', href: '#/analytics/' + encodeURIComponent(e.name) },
-          h('b', {}, e.name), h('div', { class: 'muted small' }, `Не растёт с ${fmtDate(pl.since)} — ${pl.sessions} занятия подряд${pl.weight ? `, рабочий вес ${fmtNum(pl.weight)} кг` : ''}. Всего выполнялось ${hist.length} раз.`)))
-          : h('section', { class: 'card empty' }, '✓ Плато не найдено'));
+      const [pn, ppct] = plateauCfg(db);
+      put(body, h('p', { class: 'muted small' }, `Здесь упражнения, которые ты делаешь регулярно (минимум в двух разных циклах), но за последние ${pn} занятий вес не рос, а общий объём вырос меньше чем на ${ppct}%. Упражнения, которые были разово или только в одном цикле, не учитываются. Пороги можно поменять в Настройках.`),
+        plateaus.length ? plateaus.map(({ e, pl }) => h('a', { class: 'card pl-card', href: '#/analytics/' + encodeURIComponent(e.name) },
+          h('div', { class: 'row between' }, h('b', {}, e.name), icon('chevright')),
+          h('div', { class: 'pl-line' }, `Делаешь часто: ${pl.total} ${plural(pl.total, ['раз', 'раза', 'раз'])} в ${pl.cycles} ${plural(pl.cycles, ['цикле', 'циклах', 'циклах'])}`),
+          h('div', { class: 'pl-line muted' }, `Без роста с ${fmtDate(pl.since, false)} (≈ ${Math.max(1, Math.round(daysBetween(pl.since, pl.last) / 7))} нед.)${pl.weight ? `, рабочий вес ${fmtNum(pl.weight)} кг` : ''}`),
+          h('small', { class: 'muted' }, 'Можно попробовать: добавить 1–2 повтора, небольшой шаг веса, ещё один круг или другой темп.')))
+          : h('section', { class: 'card empty' }, 'Плато не найдено: по всем регулярным упражнениям есть прогресс.'));
     } else {
       const dups = similarExercises(db);
       put(body, dups.length ? h('a', { class: 'card warn', href: '#/exercises' }, `Возможных дублей упражнений: ${dups.length}. Открыть и объединить →`) : null,
@@ -311,7 +334,7 @@ export function analyticsView(name) {
   }
   const meta = exMeta(db, name), hist = historyOf(db, name);
   const stats = hist.map((e) => ({ e, s: setStats(e.it.sets, meta) }));
-  const pl = plateau(hist, meta, ...plateauCfg(db));
+  const pl = plateauFor(db, name, hist);
   const hasWeight = stats.some((x) => x.s.maxW !== null);
   const unitWord = meta.unit === 'sec' ? 'секунд' : 'повторов';
   const last = stats.at(-1), prev = stats.at(-2);
@@ -337,10 +360,10 @@ export function analyticsView(name) {
   paintVol();
 
   put(root, 
-    h('div', { class: 'ex-sticky' }, h('a', { class: 'back', href: '#/analytics', 'aria-label': 'Назад', title: 'Назад' }, '←'),
+    h('div', { class: 'ex-sticky' }, h('a', { class: 'back', href: '#/analytics', 'aria-label': 'Назад', title: 'Назад' }, icon('back')),
       h('h1', { title: name }, name),
-      h('button', { class: 'ico star', title: 'Избранное', 'aria-label': 'Избранное', onclick: () => { const e = ensureExercise(db, name); e.fav = !e.fav; markChanged(); refresh(); } }, (findExercise(db, name) || {}).fav ? '★' : '☆'),
-      h('button', { class: 'ico', title: 'Переименовать / объединить', 'aria-label': 'Переименовать', onclick: () => mergeDialog(name, '', (nn) => { location.hash = '#/analytics/' + encodeURIComponent(nn); }) }, '✎')),
+      h('button', { class: 'ico star' + ((findExercise(db, name) || {}).fav ? ' on' : ''), title: 'Избранное', 'aria-label': 'Избранное', onclick: () => { const e = ensureExercise(db, name); e.fav = !e.fav; markChanged(); refresh(); } }, icon((findExercise(db, name) || {}).fav ? 'star' : 'starO')),
+      h('button', { class: 'ico', title: 'Переименовать / объединить', 'aria-label': 'Переименовать', onclick: () => mergeDialog(name, '', (nn) => { goto('#/analytics/' + encodeURIComponent(nn)); }) }, icon('edit'))),
     meta.assist ? h('div', { class: 'chips' }, h('span', { class: 'chip' }, 'вес = облегчение: меньше лучше')) : null,
     !hist.length ? h('section', { class: 'card empty' }, 'По этому упражнению пока нет заполненных тренировок.') : null,
     pl ? h('section', { class: 'card warn' }, `⚠ Плато: за последние ${pl.sessions} раза (с ${fmtDate(pl.since)}) вес и объём не росли. Может, пора изменить вес, число кругов или повторов — или это осознанное решение тренера.`) : null);
@@ -382,7 +405,7 @@ export function bodyView() {
   const db = state.db;
   const root = h('div', { class: 'page' });
   const date = h('input', { type: 'date', class: 'date-in', value: todayISO() });
-  const inputs = Object.fromEntries(BODY.map(([k, l, u]) => [k, h('input', { class: 'num', inputmode: 'decimal', placeholder: u })]));
+  const inputs = Object.fromEntries(BODY.map(([k, l, u]) => [k, h('input', { class: 'num', inputmode: 'decimal', pattern: '[0-9]*[.,]?[0-9]*', autocomplete: 'off', placeholder: u, oninput: (e) => { const t = e.target; const v = t.value.replace(/[^0-9.,]/g, '').replace(/[.,](?=.*[.,])/g, ''); if (v !== t.value) t.value = v; } })]));
   const fill = (d) => { const m = db.measures.find((x) => x.date === d); for (const [k] of BODY) inputs[k].value = m ? fmtNum(m[k]) : ''; };
   const clear = () => { for (const [k] of BODY) inputs[k].value = ''; };
   date.addEventListener('change', () => fill(date.value));
@@ -396,19 +419,31 @@ export function bodyView() {
   put(root, h('h1', {}, 'Замеры'),
     h('section', { class: 'card' }, h('div', { class: 'row wrap' }, date), h('div', { class: 'grid4' }, BODY.map(([k, l, u]) => h('label', { class: 'fld' }, h('span', {}, `${l}, ${u}`), inputs[k]))),
       h('div', { class: 'row end' }, h('button', { class: 'btn primary', onclick: save }, 'Сохранить'))),
-    h('div', { class: 'row between wrap' }, h('h2', {}, 'Графики'), periodBar(bodyPeriod, [...db.measures.map((m) => m.date)])),
-    ...BODY.map(([k, l, u]) => {
-      const [from, to] = periodRange(bodyPeriod);
-      const pts = db.measures.filter((m) => m[k] !== null && m[k] !== undefined && isISO(m.date) && m.date >= from && m.date <= to).map((m) => ({ x: m.date, y: m[k] }));
-      const box = h('div', {}, pts.length ? lineChart([{ name: l, cls: 's1', points: pts }], { unit: u }) : h('div', { class: 'empty small' }, 'Нет замеров за выбранный период'));
-      return h('section', { class: 'card' }, h('div', { class: 'row between wrap' }, h('h3', {}, `${l}, ${u}`), pts.length ? copyBtn(box, { title: `${l}, ${u}` }) : null), box);
-    }),
-    h('section', { class: 'card' }, h('h3', {}, 'Записи'), h('small', { class: 'muted' }, 'Стрелки показывают изменение к предыдущему замеру. Цветом не окрашиваются: «лучше» здесь зависит от цели.'),
-      h('div', { class: 'hist' }, [...db.measures].reverse().map((m, i, arr) => {
-        const p = arr[i + 1];
-        return h('div', { class: 'hist-row' }, h('b', { onclick: () => { date.value = m.date; fill(m.date); window.scrollTo(0, 0); } }, fmtDate(m.date, false)),
-          BODY.map(([k, l]) => m[k] == null ? h('span', { class: 'muted' }, '—') : h('span', {}, `${l.split(' ')[0]} ${fmtNum(m[k])}`, p && p[k] != null && p[k] !== m[k] ? h('small', { class: 'muted' }, m[k] > p[k] ? ' ▲' : ' ▼') : '')),
-          h('button', { class: 'ico', title: 'Удалить', onclick: () => { db.measures = db.measures.filter((x) => x.date !== m.date); markChanged(); refresh(); } }, '✕'));
-      }))));
+    h('div', { class: 'row between wrap' }, h('h2', {}, 'История'), periodBar(bodyPeriod, [...db.measures.map((m) => m.date)])),
+    (() => {
+      const all = [...db.measures].sort((x, y) => (x.date < y.date ? -1 : 1));
+      const rows = all.map((m, i) => ({ m, p: all[i - 1] })).filter((r) => inPeriod(bodyPeriod, r.m.date)).reverse();
+      if (!rows.length) return h('section', { class: 'card' }, h('div', { class: 'empty small' }, 'Нет замеров за выбранный период'));
+      const dlt = (k, m, p) => {
+        // сравниваем с ближайшим более ранним замером, где это поле заполнено
+        const prev = [...all].reverse().find((x) => x.date < m.date && x[k] != null);
+        if (m[k] == null || !prev) return null;
+        const d = Math.round((m[k] - prev[k]) * 10) / 10;
+        return d ? h('small', { class: 'dl-d' }, `${d > 0 ? '+' : '−'}${fmtNum(Math.abs(d))}`) : null;
+      };
+      return h('section', { class: 'card' },
+        h('div', { class: 'row between wrap' }, h('h3', {}, 'Замеры'), h('small', { class: 'muted' }, periodText(bodyPeriod)),
+          h('button', { class: 'btn small icon-only', title: 'Поделиться таблицей картинкой', 'aria-label': 'Поделиться таблицей', onclick: () => copyTable({ title: `Замеры · ${periodText(bodyPeriod)}`,
+            columns: ['Дата', ...BODY.map(([, l, u]) => `${l.split(' (')[0]}\n${u}`)],
+            rows: rows.map(({ m }) => [fmtDate(m.date, false), ...BODY.map(([k]) => { if (m[k] == null) return '—'; const prev = [...all].reverse().find((x) => x.date < m.date && x[k] != null); const d = prev ? Math.round((m[k] - prev[k]) * 10) / 10 : 0; return fmtNum(m[k]) + (d ? `\n${d > 0 ? '+' : '−'}${fmtNum(Math.abs(d))}` : ''); })]),
+            note: 'Маленькое число — изменение к предыдущему замеру' }) }, icon('share'))),
+        h('div', { class: 'tbl-wrap' }, h('table', { class: 'sets body-tbl' },
+          h('thead', {}, h('tr', {}, h('th', {}, 'Дата'), BODY.map(([, l, u]) => h('th', {}, l.split(' (')[0], h('small', {}, u))), h('th', {}))),
+          h('tbody', {}, rows.map(({ m, p }) => h('tr', {},
+            h('td', { class: 'dt', title: 'Нажми, чтобы изменить', onclick: () => { date.value = m.date; fill(m.date); window.scrollTo(0, 0); } }, fmtDate(m.date, false)),
+            BODY.map(([k]) => h('td', {}, m[k] == null ? h('span', { class: 'muted' }, '—') : [fmtNum(m[k]), dlt(k, m, p)])),
+            h('td', {}, h('button', { class: 'ico', title: 'Удалить запись', 'aria-label': 'Удалить запись', onclick: async () => { if (await confirmBox(`Удалить замер от ${fmtDate(m.date)}?`, 'Удалить')) { db.measures = db.measures.filter((x) => x.date !== m.date); markChanged(); refresh(); } } }, icon('trash')))))))),
+        h('small', { class: 'muted' }, 'Маленькое число — изменение к предыдущему замеру. Нажми на дату, чтобы поправить запись.'));
+    })());
   return root;
 }

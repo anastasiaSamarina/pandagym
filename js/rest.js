@@ -1,6 +1,7 @@
 // Таймер отдыха между подходами: плашка снизу, звук и вибрация по окончании.
 // Звук играет только если страница его разрешает (после нажатия на кнопку — разрешает) и экран телефона не заблокирован.
 import { h } from './util.js';
+import { icon } from './icons.js';
 import { state, saveDevice } from './store.js';
 
 let ctx = null;
@@ -41,8 +42,11 @@ function sounds() {
   }
 }
 let keep = null;
+export const keepAliveOn = () => !!state.device.restKeepAlive;
+export function setKeepAlive(v) { state.device.restKeepAlive = !!v; saveDevice(); }
 function keepAlive(label) {
-  if (!soundOn()) return;
+  // По умолчанию выключено: беззвучная дорожка заставляет телефон «перехватывать» звук у музыки и приглушать её.
+  if (!soundOn() || !keepAliveOn()) return;
   try {
     sounds();
     keep = new Audio(silenceUrl); keep.loop = true; keep.volume = 0.05; keep.play().catch(() => { keep = null; });
@@ -59,6 +63,7 @@ async function ring() {
   if (keep && soundOn()) { try { keep.loop = false; keep.src = alarmUrl; keep.volume = 1; await keep.play(); played = true; } catch { /* попробуем WebAudio */ } }
   if (!played && soundOn()) { beep(988, 200, 0.3); beep(988, 200, 0.3, 0.28); beep(1318, 380, 0.3, 0.56); }
   try { navigator.vibrate && navigator.vibrate([250, 120, 250, 120, 400]); } catch { /* ignore */ }
+  if (!keep) setTimeout(releaseAudio, 1500);
   // уведомление, если ушли из приложения (разрешение спрашиваем при первом запуске)
   try {
     if (document.hidden && 'Notification' in window && Notification.permission === 'granted') {
@@ -70,6 +75,8 @@ function askNotify() {
   try { if ('Notification' in window && Notification.permission === 'default' && !state.device.askedNotify) { state.device.askedNotify = true; saveDevice(); Notification.requestPermission(); } } catch { /* ignore */ }
 }
 
+/** Освободить звук: музыка у телефона возвращается к обычной громкости */
+function releaseAudio() { try { if (ctx && ctx.state === 'running') ctx.suspend(); } catch { /* ignore */ } }
 let bar = null, tick = null, endAt = 0, done = false, lock = null;
 const fmt = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 
@@ -77,8 +84,9 @@ export function stopRest() {
   clearInterval(tick); tick = null;
   if (bar) { bar.remove(); bar = null; }
   try { lock && lock.release(); } catch { /* ignore */ } lock = null;
-  if (keep) { try { keep.pause(); } catch { /* ignore */ } keep = null; }
-  try { if ('mediaSession' in navigator) navigator.mediaSession.metadata = null; } catch { /* ignore */ }
+  if (keep) { try { keep.pause(); keep.removeAttribute('src'); keep.load(); } catch { /* ignore */ } keep = null; }
+  try { if ('mediaSession' in navigator) { navigator.mediaSession.metadata = null; navigator.mediaSession.playbackState = 'none'; ['pause', 'stop'].forEach((a) => navigator.mediaSession.setActionHandler(a, null)); } } catch { /* ignore */ }
+  releaseAudio();
 }
 export function startRest(sec) {
   stopRest();
@@ -87,7 +95,7 @@ export function startRest(sec) {
   endAt = Date.now() + sec * 1000; done = false;
   const time = h('b', { class: 'rest-time' }), label = h('span', { class: 'rest-label' }, 'Отдых');
   bar = h('div', { class: 'rest-bar', role: 'timer' }, label, time,
-    h('button', { class: 'btn small', onclick: stopRest }, '✕'));
+    h('button', { class: 'btn rest-x', 'aria-label': 'Остановить отдых', onclick: stopRest }, icon('x')));
   document.body.append(bar);
   try { navigator.wakeLock && navigator.wakeLock.request('screen').then((l) => { lock = l; }).catch(() => {}); } catch { /* ignore */ }
   const paint = () => {

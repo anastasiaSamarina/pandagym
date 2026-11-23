@@ -110,7 +110,7 @@ input.note-in { min-height: 38px; font-size: .9rem; margin-top: 6px; }
 .pick { text-align: left; display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--line); background: var(--card); cursor: pointer; } .pick small { color: var(--muted); }
 .pick.create { flex-direction: row; align-items: center; gap: 8px; flex-wrap: wrap; cursor: default; border-style: dashed; }
 .hist { display: flex; flex-direction: column; } .hist-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: baseline; padding: 9px 0; border-top: 1px solid var(--line); color: var(--text); } .hist-row:first-child { border-top: 0; }
-.chart { width: 100%; height: auto; display: block; } .chart .grid { stroke: var(--line); stroke-width: 1; } .chart .axis { fill: var(--muted); font-size: 11px; }
+.chart { width: 100%; height: auto; display: block; } .chart .grid { stroke: var(--line); stroke-width: 1; } .chart .axis { fill: var(--text); opacity: .75; font-size: 21px; }
 .chart .line { fill: none; stroke-width: 2.5; stroke-linejoin: round; } .chart .line.s1, .chart .dot.s1 { stroke: var(--accent); } .chart .dot.s1 { fill: var(--accent); } .chart .line.s2, .chart .dot.s2 { stroke: #e08a1e; } .chart .dot.s2 { fill: #e08a1e; } .chart .dot { stroke-width: 0; }
 .chart .bar { fill: var(--accent); opacity: .85; } .chart .bar.met { fill: var(--good); } .chart .goal { stroke: var(--muted); stroke-dasharray: 4 4; }
 .legend { display: flex; gap: 8px; align-items: center; font-size: .8rem; color: var(--muted); } .sw { width: 12px; height: 12px; border-radius: 3px; display: inline-block; background: var(--accent); } .sw.s2 { background: #e08a1e; }
@@ -215,3 +215,43 @@ table.cmp td { text-align: center; } table.cmp td.better { color: var(--good); f
 .hm-days { position: sticky; left: 0; background: var(--card); z-index: 1; }
 
 .video-wrap { width: 100%; max-width: 360px; } .media-video { width: 100%; max-height: 420px; border-radius: 12px; background: #000; display: block; }
+
+/* иконки */
+.ic { display: inline-flex; width: 1.3em; height: 1.3em; vertical-align: -.25em; flex: none; } .ic svg { width: 100%; height: 100%; }
+.ico { display: inline-flex; align-items: center; justify-content: center; } .ico .ic { width: 22px; height: 22px; }
+.btn .ic { width: 1.15em; height: 1.15em; margin-right: 4px; vertical-align: -.2em; } .btn.icon-only .ic { margin: 0; }
+.back .ic { width: 24px; height: 24px; margin: 0; }
+.ico-n .ic { width: 26px; height: 26px; }
+/* всплывающие подсказки — сверху */
+#toast { bottom: auto !important; top: calc(12px + env(safe-area-inset-top)); transform: translate(-50%, -20px) !important; z-index: 90; max-width: calc(100vw - 24px); }
+#toast.show { transform: translate(-50%, 0) !important; }
+/* плашка синхронизации: только когда есть что показать, и не поверх кнопок */
+.sync-badge { top: auto; bottom: calc(var(--nav-h) + 10px + env(safe-area-inset-bottom)); right: 10px; z-index: 25; box-shadow: 0 2px 8px rgba(0,0,0,.15); }
+
+/* карточка упражнения */
+.ex-head { display: flex; align-items: center; gap: 2px; }
+.ex-name-btn { flex: 1; min-width: 0; text-align: left; font: inherit; font-weight: 700; font-size: 1.05rem; color: var(--text); background: transparent; border: 1px dashed var(--line); border-radius: 10px; padding: 6px 10px; margin-right: 4px; cursor: text; overflow-wrap: anywhere; }
+.ico.star { color: var(--muted); } .ico.star.on { color: #e0a21e; }
+table.sets th { text-align: center; }
+.tools-row { display: flex; gap: 8px; margin-top: 12px; } .tools-row .grow { flex: 1; min-height: 44px; } .tools-row .icon-only { width: 52px; min-height: 44px; padding: 0; }
+.rest-big { width: 100%; min-height: 56px; margin-top: 8px; font-size: 1.1rem; font-weight: 600; background: var(--accent-soft); color: var(--accent); border: 1px solid var(--accent); }
+.thumb-wrap .x .ic { width: 14px; height: 14px; margin: 0; }
+
+.rest-x { min-width: 48px; min-height: 44px; padding: 0 12px; }
+
+.tbl-wrap { overflow-x: auto; } table.body-tbl th small { display: block; font-weight: 400; color: var(--muted); } table.body-tbl td { text-align: center; padding: 8px 4px; vertical-align: middle; font-size: 1.05rem; }
+table.body-tbl td.dt { text-align: left; font-weight: 600; cursor: pointer; white-space: nowrap; font-size: .95rem; } .dl-d { display: block; color: var(--muted); font-size: .72rem; }
+
+.cal-tools { margin: 6px 0 8px; gap: 8px; }
+
+/* пока открыта шторка — страница под ней не прокручивается, только содержимое шторки */
+html.modal-open, html.modal-open body { overflow: hidden; overscroll-behavior: none; }
+.modal-back { overscroll-behavior: contain; } .modal { overflow-y: auto; overscroll-behavior: contain; max-height: 88vh; }
+
+.ico:disabled { opacity: .3; cursor: default; pointer-events: none; }
+
+h3 .ic { width: 1.2em; height: 1.2em; vertical-align: -.2em; margin-right: 2px; }
+
+.pl-card { display: block; text-decoration: none; color: inherit; } .pl-line { margin-top: 4px; } .pl-card small { display: block; margin-top: 6px; }
+
+.btn.small.icon-only { min-width: 44px; padding-left: 10px; padding-right: 10px; }

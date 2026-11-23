@@ -6,7 +6,7 @@ export const newPeriod = () => ({ mode: 'all', year: 0, month: 0 });
 
 export function periodRange(p) {
   const today = todayISO();
-  if (p.mode === '3' || p.mode === '6') {
+  if (p.mode === '1' || p.mode === '3' || p.mode === '6') {
     const d = new Date(); d.setMonth(d.getMonth() - Number(p.mode));
     return [`${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`, today];
   }
@@ -18,6 +18,7 @@ export function periodRange(p) {
 }
 export const inPeriod = (p, date) => { const [a, b] = periodRange(p); return isISO(date) && date >= a && date <= b; };
 export function periodText(p) {
+  if (p.mode === '1') return 'последний месяц';
   if (p.mode === '3' || p.mode === '6') return `последние ${p.mode} мес.`;
   if (p.mode === 'year' && p.year) return p.month ? `${MONTHS_NOM[p.month - 1]} ${p.year}` : `${p.year} год`;
   return 'всё время';
@@ -31,7 +32,7 @@ export function periodBar(p, dates = [], onChange = refresh) {
   const set = (mode) => { p.mode = mode; if (mode !== 'year') { p.year = 0; p.month = 0; } onChange(); };
   const chip = (mode, label) => h('button', { class: 'pill' + (p.mode === mode ? ' on' : ''), onclick: () => set(mode) }, label);
   return h('div', { class: 'pf', role: 'group', 'aria-label': 'Период' },
-    chip('all', 'Всё'), chip('3', '3 мес'), chip('6', '6 мес'),
+    chip('all', 'Всё'), chip('1', 'Месяц'), chip('3', '3 мес'), chip('6', '6 мес'),
     years.length ? h('select', { class: 'pf-sel' + (p.mode === 'year' ? ' on' : ''), 'aria-label': 'Год', value: p.mode === 'year' ? String(p.year) : '', onchange: (e) => {
       const y = Number(e.target.value); if (!y) { set('all'); return; }
       p.mode = 'year'; p.year = y; p.month = 0; onChange();

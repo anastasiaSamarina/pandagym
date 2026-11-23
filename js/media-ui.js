@@ -1,4 +1,5 @@
 // Фото, GIF и ссылки на видео у упражнения. Файлы лежат в IndexedDB устройства и (при синхронизации) в папке media/ репозитория.
+import { icon } from './icons.js';
 import { h, toast, modal, uid } from './util.js';
 import { touch, putMedia } from './store.js';
 import { mediaUrl } from './sync.js';
@@ -35,7 +36,7 @@ function openImage(src) { modal((close) => h('img', { src, class: 'big-img', onc
 
 export function mediaStrip(it, w, rerender) {
   if (!it.media || !it.media.length) return null;
-  const remove = (id) => h('button', { class: 'x', title: 'Убрать', onclick: () => { it.media = it.media.filter((m) => m !== id); touch(w); rerender(); } }, '✕');
+  const remove = (id) => h('button', { class: 'x', title: 'Убрать', 'aria-label': 'Убрать', onclick: () => { it.media = it.media.filter((m) => m !== id); touch(w); rerender(); } }, icon('x'));
   return h('div', { class: 'media-strip' }, it.media.map((id) => {
     if (isVideoId(id)) {
       // видео играет прямо в карточке: без звука, по кругу, само (когда попадает на экран)
@@ -84,12 +85,12 @@ export function linkStrip(it, w, rerender) {
         box.replaceChildren(emb.kind === 'iframe' ? h('iframe', { class: 'video-frame', src: emb.src, allowfullscreen: true, loading: 'lazy', referrerpolicy: 'strict-origin-when-cross-origin', allow: 'encrypted-media; picture-in-picture; fullscreen' })
           : emb.kind === 'video' ? h('video', { class: 'video-frame', src: emb.src, controls: true, playsinline: true, preload: 'metadata' }) : h('img', { class: 'big-img', src: emb.src, alt: '' }));
         box.hidden = false; e.target.textContent = '▲ Скрыть';
-      } else { box.replaceChildren(); box.hidden = true; e.target.textContent = '▶ Смотреть'; }
-    } }, '▶ Смотреть') : null;
+      } else { box.replaceChildren(); box.hidden = true; e.target.textContent = 'Смотреть'; }
+    } }, 'Смотреть') : null;
     return h('div', { class: 'link-row' },
       h('div', { class: 'row between' },
         h('a', { class: 'link', href: url, target: '_blank', rel: 'noopener noreferrer' }, '🔗 ' + hostOf(url)),
-        h('span', { class: 'row' }, toggle, h('button', { class: 'ico', title: 'Убрать ссылку', onclick: () => { it.links = it.links.filter((x) => x !== url); touch(w); rerender(); } }, '✕'))),
+        h('span', { class: 'row' }, toggle, h('button', { class: 'ico', title: 'Убрать ссылку', 'aria-label': 'Убрать ссылку', onclick: () => { it.links = it.links.filter((x) => x !== url); touch(w); rerender(); } }, icon('x')))),
       box);
   }));
 }
@@ -106,10 +107,10 @@ function linkDialog(it, w, rerender) {
   setTimeout(() => input.focus(), 50);
 }
 
-/** Одна кнопка для любых файлов + ссылка на видео */
+/** Две кнопки без подписей: файл и ссылка */
 export function mediaButtons(it, w, rerender) {
   return [
-    h('button', { class: 'btn small', title: 'Фото, GIF или короткое видео (jpg, png, gif, webp, mp4)', onclick: () => attach(it, w, rerender) }, '📎 Файл'),
-    h('button', { class: 'btn small', onclick: () => linkDialog(it, w, rerender) }, '🔗 Ссылка'),
+    h('button', { class: 'btn small icon-only', title: 'Прикрепить файл: фото, GIF или короткое видео', 'aria-label': 'Прикрепить файл', onclick: () => attach(it, w, rerender) }, icon('clip')),
+    h('button', { class: 'btn small icon-only', title: 'Добавить ссылку на видео', 'aria-label': 'Добавить ссылку', onclick: () => linkDialog(it, w, rerender) }, icon('link')),
   ];
 }

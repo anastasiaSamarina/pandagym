@@ -1,4 +1,5 @@
 // Картинка тренировки для "Поделиться": рисуем таблицу на canvas и кладём PNG в буфер обмена.
+import { iconPath } from './icons.js';
 import { compareItem, exMeta, num, wName } from './model.js';
 import { state } from './store.js';
 import { fmtDate, fmtNum, toast, download, plural } from './util.js';
@@ -87,8 +88,10 @@ export function renderWorkoutCanvas(w, { withColors = true } = {}) {
     if (r.kind === 'text') { r.body = r.parts.flatMap((p) => wrap(m, p, W - pad * 2 - 20)); r.h = 56 + r.body.length * 34 + 16; }
     else r.h = Math.max(r.lines.length * 38, 38) + 34 + (r.dl.length ? r.dl.length * 34 + 16 : 0) + (r.note ? 30 : 0);
   });
+  const noteLines = w.note && w.note.trim() ? w.note.trim().split('\n').flatMap((l) => wrap(m, l, W - pad * 2 - 56)) : [];
+  const noteH = noteLines.length ? 28 + noteLines.length * 34 + 22 : 0;
   const headH = 130, tableHead = 50, foot = 56;
-  const H = headH + tableHead + rows.reduce((a, r) => a + r.h, 0) + foot;
+  const H = headH + tableHead + rows.reduce((a, r) => a + r.h, 0) + noteH + foot;
   const cv = document.createElement('canvas');
   cv.width = W * scale; cv.height = H * scale;
   const ctx = cv.getContext('2d');
@@ -105,12 +108,14 @@ export function renderWorkoutCanvas(w, { withColors = true } = {}) {
   let y = headH;
   ctx.fillStyle = C.head; ctx.fillRect(0, y, W, tableHead);
   ctx.fillStyle = C.muted; ctx.font = `600 26px ${FONT}`;
-  ctx.fillText('🏋️', cols.name, y + 34);
-  ctx.textAlign = 'center';
-  ctx.fillText('🔁', cols.rounds + colW.rounds / 2, y + 33);
-  ctx.fillText('⚖️', cols.weight + colW.weight / 2, y + 33);
-  ctx.fillText('🔢', cols.reps + colW.reps / 2, y + 33);
-  ctx.textAlign = 'left';
+  const drawIcon = (name, x, yy, size, color = C.muted) => { // x — центр иконки по горизонтали
+    ctx.save(); ctx.translate(x - size / 2, yy); ctx.scale(size / 24, size / 24);
+    ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.stroke(new Path2D(iconPath(name))); ctx.restore();
+  };
+  drawIcon('dumbbell', cols.name + 18, y + 10, 30);
+  drawIcon('repeat', cols.rounds + colW.rounds / 2, y + 10, 30);
+  drawIcon('kettle', cols.weight + colW.weight / 2, y + 10, 30);
+  drawIcon('hash', cols.reps + colW.reps / 2, y + 10, 30);
   y += tableHead;
 
   const drawSeq = (values, classes, cx, maxW) => {
@@ -165,6 +170,12 @@ export function renderWorkoutCanvas(w, { withColors = true } = {}) {
     }
     y += r.h;
   });
+  if (noteLines.length) { // заметка о тренировке
+    drawIcon('note', pad + 14, y + 18, 28);
+    ctx.fillStyle = C.text; ctx.font = `26px ${FONT}`;
+    noteLines.forEach((l, i) => ctx.fillText(l, pad + 56, y + 42 + i * 34));
+    y += noteH;
+  }
   ctx.fillStyle = C.muted; ctx.font = `20px ${FONT}`;
   ctx.fillText(withColors ? 'Зелёный — стало больше, красный — меньше, чем в прошлый раз' : '', pad, H - 20);
   return cv;
